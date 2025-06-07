@@ -550,6 +550,83 @@ class YOLOViewController {
   }
 
   // endregion
+
+  /// Stops the camera and inference processing.
+  ///
+  /// This method completely stops the camera preview and any running
+  /// YOLO inference. Use this when navigating away from the detection
+  /// screen to conserve battery and processing power.
+  ///
+  /// Example:
+  /// ```dart
+  /// // Stop camera when navigating away
+  /// await controller.stop();
+  /// ```
+  Future<void> stop() async {
+    if (_methodChannel == null) {
+      debugPrint(
+        'YOLOViewController: Warning - Cannot stop, view not yet created',
+      );
+      return;
+    }
+    try {
+      await _methodChannel!.invokeMethod('stop');
+      debugPrint('YOLOViewController: Stopped successfully');
+    } catch (e) {
+      debugPrint('YOLOViewController: Error stopping: $e');
+    }
+  }
+
+  /// Pauses the camera and inference processing.
+  ///
+  /// This method pauses the camera preview and YOLO inference without
+  /// fully releasing resources. Use this for temporary pauses where
+  /// you plan to resume shortly.
+  ///
+  /// Example:
+  /// ```dart
+  /// // Pause detection temporarily
+  /// await controller.pause();
+  /// ```
+  Future<void> pause() async {
+    if (_methodChannel == null) {
+      debugPrint(
+        'YOLOViewController: Warning - Cannot pause, view not yet created',
+      );
+      return;
+    }
+    try {
+      await _methodChannel!.invokeMethod('pause');
+      debugPrint('YOLOViewController: Paused successfully');
+    } catch (e) {
+      debugPrint('YOLOViewController: Error pausing: $e');
+    }
+  }
+
+  /// Resumes the camera and inference processing.
+  ///
+  /// This method resumes the camera preview and YOLO inference after
+  /// being paused or stopped. It reinitializes the camera if necessary.
+  ///
+  /// Example:
+  /// ```dart
+  /// // Resume detection after pause
+  /// await controller.resume();
+  /// ```
+  Future<void> resume() async {
+    if (_methodChannel == null) {
+      debugPrint(
+        'YOLOViewController: Warning - Cannot resume, view not yet created',
+      );
+      return;
+    }
+    try {
+      await _methodChannel!.invokeMethod('resume');
+      debugPrint('YOLOViewController: Resumed successfully');
+    } catch (e) {
+      debugPrint('YOLOViewController: Error resuming: $e');
+    }
+  }
 }
 
 /// A Flutter widget that displays a real-time camera preview with YOLO object detection.
@@ -1109,5 +1186,31 @@ class YOLOViewState extends State<YOLOView> {
   /// Returns a [Future] that completes when the zoom level has been set.
   Future<void> setZoomLevel(double zoomLevel) {
     return _effectiveController.setZoomLevel(zoomLevel);
+  }
+
+  /// Stops the camera and inference processing.
+  ///
+  /// This method can be called using a GlobalKey to access the state:
+  /// ```dart
+  /// final key = GlobalKey<YOLOViewState>();
+  /// // Later...
+  /// key.currentState?.stop();
+  /// ```
+  Future<void> stop() {
+    return _effectiveController.stop();
+  }
+
+  /// Pauses the camera and inference processing.
+  ///
+  /// This method can be called using a GlobalKey to access the state.
+  Future<void> pause() {
+    return _effectiveController.pause();
+  }
+
+  /// Resumes the camera and inference processing.
+  ///
+  /// This method can be called using a GlobalKey to access the state.
+  Future<void> resume() {
+    return _effectiveController.resume();
   }
 }

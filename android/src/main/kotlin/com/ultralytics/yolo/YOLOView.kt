@@ -559,6 +559,35 @@ class YOLOView @JvmOverloads constructor(
         startCamera()
     }
 
+    fun stopCamera() {
+        Log.d(TAG, "Stopping camera")
+        try {
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+                cameraProvider.unbindAll()
+                Log.d(TAG, "Camera stopped successfully")
+            }, ContextCompat.getMainExecutor(context))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping camera", e)
+        }
+    }
+
+    fun pauseCamera() {
+        // Android doesn't have a separate pause state, so we'll just stop
+        Log.d(TAG, "Pausing camera (stopping)")
+        stopCamera()
+    }
+
+    fun resumeCamera() {
+        Log.d(TAG, "Resuming camera")
+        if (allPermissionsGranted()) {
+            startCamera()
+        } else {
+            Log.w(TAG, "Cannot resume camera - permissions not granted")
+        }
+    }
+
     // endregion
     
     // Lifecycle methods from DefaultLifecycleObserver
