@@ -1,0 +1,9 @@
+Add YOLO TFLite models here:
+- yolo11n.tflite (for detection)
+- yolo11n-seg.tflite (for segmentation)
+- yolo11n-cls.tflite (for classification)
+- yolo11n-pose.tflite (for pose)
+- yolo11n-obb.tflite (for OBB)
+
+You can copy these from the example app or download from:
+https://github.com/ultralytics/yolo-flutter-app/releases/

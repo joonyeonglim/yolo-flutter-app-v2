@@ -1,0 +1,7 @@
+# Sample images for screenshot generation
+# Add optimized images for each YOLO task:
+# - street_scene.jpg (for detection)
+# - indoor_scene.jpg (for segmentation)
+# - single_object.jpg (for classification)
+# - people_activity.jpg (for pose)
+# - aerial_view.jpg (for OBB)
