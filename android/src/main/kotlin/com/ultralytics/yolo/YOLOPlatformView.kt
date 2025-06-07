@@ -191,7 +191,7 @@ class YOLOPlatformView(
                         includeOBB = call.argument<Boolean>("includeOBB") ?: false,
                         includeOriginalImage = call.argument<Boolean>("includeOriginalImage") ?: false,
                         maxFPS = call.argument<Int>("maxFPS"),
-                        throttleIntervalMs = call.argument<Int>("throttleInterval"),
+                        throttleIntervalMs = call.argument<Int>("throttleIntervalMs"),
                         inferenceFrequency = call.argument<Int>("inferenceFrequency"),
                         skipFrames = call.argument<Int>("skipFrames")
                     )
@@ -200,6 +200,7 @@ class YOLOPlatformView(
                 }
                 "startRecording" -> {
                     val includeAudio = call.argument<Boolean>("includeAudio") ?: true
+                    yoloView.setAudioEnabled(includeAudio)
                     
                     yoloView.startRecording { uri, error ->
                         if (error != null) {
@@ -231,7 +232,7 @@ class YOLOPlatformView(
                     }
                 }
                 "isRecording" -> {
-                    val recording = yoloView.isRecording()
+                    val recording = yoloView.isRecording
                     Log.d(TAG, "Recording status: $recording")
                     result.success(recording)
                 }
@@ -281,6 +282,18 @@ class YOLOPlatformView(
                     is Int -> throttleMs
                     is Double -> throttleMs.toInt()
                     is String -> throttleMs.toIntOrNull()
+                    else -> null
+                },
+                inferenceFrequency = when (val inferenceFreq = streamingConfigParam["inferenceFrequency"]) {
+                    is Int -> inferenceFreq
+                    is Double -> inferenceFreq.toInt()
+                    is String -> inferenceFreq.toIntOrNull()
+                    else -> null
+                },
+                skipFrames = when (val skipFrames = streamingConfigParam["skipFrames"]) {
+                    is Int -> skipFrames
+                    is Double -> skipFrames.toInt()
+                    is String -> skipFrames.toIntOrNull()
                     else -> null
                 }
             )

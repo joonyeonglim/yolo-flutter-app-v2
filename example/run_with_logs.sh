@@ -26,7 +26,7 @@ fvm flutter run -d "R3CNC030KPB" 2>&1 | tee -a $BUILD_LOG_FILE &
 FLUTTER_PID=$!
 
 echo "⏳ Waiting for app to start..."
-sleep 5
+sleep 1
 
 echo "📊 Starting log capture..."
 echo "📁 Full logs: $FULL_LOG_FILE"

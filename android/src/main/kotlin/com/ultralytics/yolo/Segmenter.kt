@@ -103,13 +103,15 @@ class Segmenter(
                                     val yaml = Yaml()
                                     @Suppress("UNCHECKED_CAST")
                                     val data = yaml.load<Map<String, Any>>(fileString)
-                                    if (data != null && data.containsKey("names")) {
-                                        val namesMap = data["names"] as? Map<Int, String>
-                                        if (namesMap != null) {
-                                            this.labels = namesMap.values.toList()
-                                            labelsWereLoaded = true
-                                            Log.d("Segmenter", "Loaded labels from metadata: $labels")
-                                            return@breaking
+                                    data?.let { dataMap ->
+                                        if (dataMap.containsKey("names")) {
+                                            val namesMap = dataMap["names"] as? Map<Int, String>
+                                            namesMap?.let { names ->
+                                                this.labels = names.values.toList()
+                                                labelsWereLoaded = true
+                                                Log.d("Segmenter", "Loaded labels from metadata: $labels")
+                                                return@breaking
+                                            }
                                         }
                                     }
                                 } catch (ex: Exception) {
