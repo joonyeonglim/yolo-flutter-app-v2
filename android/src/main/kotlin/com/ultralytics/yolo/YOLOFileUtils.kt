@@ -34,7 +34,6 @@ object YOLOFileUtils {
             if (resolvedPath.startsWith("flutter_assets/")) {
                 resolvedPath = resolvedPath.substring("flutter_assets/".length)
             }
-            Log.d(TAG, "Appended ZIP: Attempting to load labels using path: $resolvedPath (original attempt: $currentPathAttempt)")
 
             var afd: AssetFileDescriptor? = null
         var fis: FileInputStream? = null // Corrected indentation
@@ -47,13 +46,11 @@ object YOLOFileUtils {
 
             val file = File(resolvedPath)
             if (file.isAbsolute && file.exists()) {
-                Log.d(TAG, "Appended ZIP: Accessing via File path: $resolvedPath")
                 fis = FileInputStream(file)
                 fileChannel = fis.channel
                 fileSize = fileChannel.size()
                 fileStartOffset = 0L
             } else {
-                Log.d(TAG, "Appended ZIP: Accessing via Asset path: $resolvedPath")
                 try {
                     afd = assetManager.openFd(resolvedPath)
                     fis = FileInputStream(afd.fileDescriptor)
@@ -73,14 +70,12 @@ object YOLOFileUtils {
                 // Logged warning. 'continue' will go to 'finally' then next iteration.
                 continue
             }
-            Log.d(TAG, "Appended ZIP: Path=$resolvedPath (attempt: $currentPathAttempt), Size=$fileSize, StartOffset=$fileStartOffset")
 
             val tailSearchSize = (65536 + 256).toLong() // End of Central Directory Record is typically small
             val readLength = kotlin.math.min(fileSize, tailSearchSize)
             val readOffsetInFile = fileSize - readLength
             val channelPositionForTail = fileStartOffset + readOffsetInFile
 
-            Log.d(TAG, "Appended ZIP: Reading tail. Channel Abs Position: $channelPositionForTail, Length: $readLength")
 
             val tailByteBuffer = ByteBuffer.allocate(readLength.toInt())
             fileChannel.position(channelPositionForTail)
@@ -112,14 +107,12 @@ object YOLOFileUtils {
             }
 
             val pkAbsoluteOffset = fileStartOffset + readOffsetInFile + lastPkIndexInBuffer
-            Log.d(TAG, "Appended ZIP: Found last PK header signature at absolute offset in channel: $pkAbsoluteOffset")
             
             fileChannel.position(pkAbsoluteOffset) // Position channel to the start of ZIP data
 
             Channels.newInputStream(fileChannel).use { channelIs ->
                 BufferedInputStream(channelIs).use { bis ->
                     ZipInputStream(bis).use { zis ->
-                        Log.d(TAG, "Appended ZIP: Reading entries from positioned stream...")
                         var entry: ZipEntry?
                         while (zis.nextEntry.also { entry = it } != null) {
                             Log.v(TAG, "Appended ZIP: Found entry: $entry")
@@ -195,7 +188,6 @@ object YOLOFileUtils {
 } // End of loadLabelsFromAppendedZip function
 
 private fun closeResources(afd: AssetFileDescriptor?, fis: FileInputStream?, fileChannel: FileChannel?, reason: String) {
-    Log.d(TAG, "Appended ZIP: Closing resources ($reason).")
     try { fileChannel?.close() } catch (e: IOException) { Log.e(TAG, "Error closing FileChannel", e) }
     try { fis?.close() } catch (e: IOException) { Log.e(TAG, "Error closing FileInputStream", e) }
     try { afd?.close() } catch (e: IOException) { Log.e(TAG, "Error closing AssetFileDescriptor", e) }

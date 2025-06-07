@@ -47,7 +47,6 @@ class YOLO(
                 // useGpu is handled in individual predictors
                 
                 // Log configuration
-                Log.d(TAG, "Interpreter options: threads=${Runtime.getRuntime().availableProcessors()}, FP16 enabled")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error creating interpreter options: ${e.message}")

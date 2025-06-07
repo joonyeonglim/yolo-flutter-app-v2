@@ -1,0 +1,138 @@
+You are an expert in Flutter, Dart, Riverpod, Freezed, Flutter Hooks, and Supabase.
+
+Key Principles
+
+- Write concise, technical Dart code with accurate examples.
+- Use functional and declarative programming patterns where appropriate.
+- Prefer composition over inheritance.
+- Use descriptive variable names with auxiliary verbs (e.g., isLoading, hasError).
+- Structure files: exported widget, subwidgets, helpers, static content, types.
+
+Dart/Flutter
+
+- Use const constructors for immutable widgets.
+- Leverage Freezed for immutable state classes and unions.
+- Use arrow syntax for simple functions and methods.
+- Prefer expression bodies for one-line getters and setters.
+- Use trailing commas for better formatting and diffs.
+
+Error Handling and Validation
+
+- Implement error handling in views using SelectableText.rich instead of SnackBars.
+- Display errors in SelectableText.rich with red color for visibility.
+- Handle empty states within the displaying screen.
+- Use AsyncValue for proper error handling and loading states.
+
+Riverpod-Specific Guidelines
+
+- Use @riverpod annotation for generating providers.
+- Prefer AsyncNotifierProvider and NotifierProvider over StateProvider.
+- Avoid StateProvider, StateNotifierProvider, and ChangeNotifierProvider.
+- Use ref.invalidate() for manually triggering provider updates.
+- Implement proper cancellation of asynchronous operations when widgets are disposed.
+
+Performance Optimization
+
+- Use const widgets where possible to optimize rebuilds.
+- Implement list view optimizations (e.g., ListView.builder).
+- Use AssetImage for static images and cached_network_image for remote images.
+- Implement proper error handling for Supabase operations, including network errors.
+
+Key Conventions
+
+1. Use GoRouter or auto_route for navigation and deep linking.
+2. Optimize for Flutter performance metrics (first meaningful paint, time to interactive).
+3. Prefer stateless widgets:
+   - Use ConsumerWidget with Riverpod for state-dependent widgets.
+   - Use HookConsumerWidget when combining Riverpod and Flutter Hooks.
+
+UI and Styling
+
+- Use Flutter's built-in widgets and create custom widgets.
+- Implement responsive design using LayoutBuilder or MediaQuery.
+- Use themes for consistent styling across the app.
+- Use Theme.of(context).textTheme.titleLarge instead of headline6, and headlineSmall instead of headline5 etc.
+
+Scrollable Page Guidelines
+
+- Always use NestedScrollView with SliverAppBar for screens with scrollable content.
+- Configure SliverAppBar with consistent properties:
+  - Set backgroundColor to Theme.of(context).colorScheme.surface.
+  - Set surfaceTintColor to Colors.transparent to prevent material tinting.
+  - Set scrolledUnderElevation to 0 to avoid elevation changes on scroll.
+  - Use shadowColor: Colors.transparent to prevent shadow artifacts.
+  - Set forceElevated to false to prevent forced elevation.
+- Wrap the body in a Container with matching backgroundColor for color consistency.
+- Use ClampingScrollPhysics for scroll physics matching native platform behavior.
+- For lists, prefer SliverList over ListView when inside a CustomScrollView.
+- For tab-based screens, embed TabBar in SliverAppBar's bottom property.
+- For floating app bars, set floating: true, snap: true in SliverAppBar.
+- For pinned app bars, set pinned: true in SliverAppBar.
+- For infinite scrolling lists, implement scroll position detection and pagination.
+- Avoid nesting ScrollViews without physics: NeverScrollableScrollPhysics() on inner scrollables.
+
+Model and Database Conventions
+
+- Include createdAt, updatedAt, and isDeleted fields in database tables.
+- Use @JsonSerializable(fieldRename: FieldRename.snake) for models.
+- Implement @JsonKey(includeFromJson: true, includeToJson: false) for read-only fields.
+
+Widgets and UI Components
+
+- Create small, private widget classes instead of methods like Widget \_build....
+- Implement RefreshIndicator for pull-to-refresh functionality.
+- In TextFields, set appropriate textCapitalization, keyboardType, and textInputAction.
+- Always include an errorBuilder when using Image.network.
+- Always use CustomBackButton from widgets/common/back_icon.dart for back navigation instead of the default back button.
+
+Miscellaneous
+
+- Use log instead of print for debugging.
+- Use Flutter Hooks / Riverpod Hooks where appropriate.
+- Keep lines no longer than 80 characters, adding commas before closing brackets for multi-parameter functions.
+- Use @JsonValue(int) for enums that go to the database.
+
+Code Generation
+
+- Utilize build_runner for generating code from annotations (Freezed, Riverpod, JSON serialization).
+- Run 'flutter pub run build_runner build --delete-conflicting-outputs' after modifying annotated classes.
+
+Documentation
+
+- Document complex logic and non-obvious code decisions.
+- Follow official Flutter, Riverpod, and Supabase documentation for best practices.
+
+Refer to Flutter, Riverpod, and Supabase documentation for Widgets, State Management, and Backend Integration best practices.
+
+Theme Rules
+
+- Use Theme.of(context).colorScheme.onSurfaceVariant.withAlpha(102) for divider color.
+- Use Theme.of(context).colorScheme.surface for background color.
+- Use Theme.of(context).colorScheme.onSurface for text and icon colors.
+- Use Theme.of(context).colorScheme.primary for primary actions and highlights.
+- Use Theme.of(context).colorScheme.secondary for secondary actions.
+- Use Theme.of(context).colorScheme.error for error states.
+- Use Theme.of(context).colorScheme.surfaceContainerHighest for elevated surfaces.
+- Use Theme.of(context).brightness to check dark/light mode.
+- Use Theme.of(context).textTheme for consistent typography.
+- Use Theme.of(context).cardTheme for card styling.
+- Use Theme.of(context).iconTheme for consistent icon sizes.
+
+Commit Rules
+- feat: 새로운 기능 추가
+- fix: 버그 수정
+- refactor: 코드 리팩토링
+- chore: 빌드 및 테스트 작업
+- docs: 문서 수정
+- style: 코드 스타일 변경
+- perf: 성능 개선
+- test: 테스트 코드 추가
+- build: 빌드 작업
+- chore: CURRENT_PROJECT_VERSION = $version (project.pbxproj에서 버전만 변경된 경우)
+
+Git Rules
+- 함부로 git 관련한 action 중 commit or push하지 마십시오.
+- flutter run을 별도로 실행하지 마십시오.
+
+flutter rules
+- FVM을 사용하므로 모든 flutter 명령어는 fvm flutter로 실행해야 합니다.

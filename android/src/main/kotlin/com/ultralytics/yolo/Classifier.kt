@@ -58,13 +58,10 @@ class Classifier(
             val associatedFiles = metadataExtractor.associatedFileNames
             if (!associatedFiles.isNullOrEmpty()) {
                 for (fileName in associatedFiles) {
-                    Log.d(TAG, "Found associated file: $fileName")
                     val inputStream = metadataExtractor.getAssociatedFile(fileName)
                     inputStream?.use { stream ->
                         val fileContent = stream.readBytes()
                         val fileString = fileContent.toString(Charsets.UTF_8)
-                        Log.d(TAG, "Associated file contents:\n$fileString")
-
                         try {
                             val yaml = Yaml()
                             @Suppress("UNCHECKED_CAST")
@@ -73,7 +70,6 @@ class Classifier(
                                 val namesMap = data["names"] as? Map<Int, String>
                                 if (namesMap != null) {
                                     this.labels = namesMap.values.toList()
-                                    Log.d(TAG, "Loaded labels from metadata: $labels")
                                 } else {}
                             } else {}
                         } catch (ex: Exception) {

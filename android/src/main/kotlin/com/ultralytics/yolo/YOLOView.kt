@@ -17,6 +17,14 @@ import androidx.camera.core.*
 import androidx.camera.core.Camera
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.camera.video.VideoCapture
+import androidx.camera.video.Recorder
+import androidx.camera.video.Recording
+import androidx.camera.video.VideoRecordEvent
+import androidx.camera.video.MediaStoreOutputOptions
+import androidx.camera.video.Quality
+import androidx.camera.video.QualitySelector
+import androidx.camera.video.PendingRecording
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
@@ -28,6 +36,10 @@ import kotlin.math.max
 import kotlin.math.min
 import android.widget.TextView
 import android.view.Gravity
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.TimeUnit
 
 class YOLOView @JvmOverloads constructor(
     context: Context,
@@ -39,9 +51,45 @@ class YOLOView @JvmOverloads constructor(
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
-        private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+        private val REQUIRED_PERMISSIONS = arrayOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
 
         private const val TAG = "YOLOView"
+        
+        // 로그 레벨 제어
+        private const val LOG_LEVEL_VERBOSE = 0
+        private const val LOG_LEVEL_DEBUG = 1
+        private const val LOG_LEVEL_INFO = 2
+        private const val LOG_LEVEL_WARN = 3
+        private const val LOG_LEVEL_ERROR = 4
+        
+        // 현재 로그 레벨 설정 (INFO 이상만 표시)
+        private const val CURRENT_LOG_LEVEL = LOG_LEVEL_INFO
+        
+        // 로그 유틸리티 함수들
+        private fun logI(tag: String, message: String) {
+            if (CURRENT_LOG_LEVEL <= LOG_LEVEL_INFO) {
+                Log.i(tag, message)
+            }
+        }
+        
+        private fun logW(tag: String, message: String) {
+            if (CURRENT_LOG_LEVEL <= LOG_LEVEL_WARN) {
+                Log.w(tag, message)
+            }
+        }
+        
+        private fun logE(tag: String, message: String, throwable: Throwable? = null) {
+            if (CURRENT_LOG_LEVEL <= LOG_LEVEL_ERROR) {
+                if (throwable != null) {
+                    Log.e(tag, message, throwable)
+                } else {
+                    Log.e(tag, message)
+                }
+            }
+        }
 
         // Line thickness and corner radius
         private const val BOX_LINE_WIDTH = 8f
@@ -159,18 +207,13 @@ class YOLOView @JvmOverloads constructor(
     
     /** Set streaming configuration */
     fun setStreamConfig(config: YOLOStreamConfig?) {
-        Log.d(TAG, "🔄 Setting new streaming config")
-        Log.d(TAG, "📋 Previous config: $streamConfig")
         this.streamConfig = config
         setupThrottlingFromConfig()
-        Log.d(TAG, "✅ New streaming config set: $config")
-        Log.d(TAG, "🎯 Key settings - includeMasks: ${config?.includeMasks}, includeProcessingTimeMs: ${config?.includeProcessingTimeMs}, inferenceFrequency: ${config?.inferenceFrequency}")
     }
     
     /** Set streaming callback */
     fun setStreamCallback(callback: ((Map<String, Any>) -> Unit)?) {
         this.streamCallback = callback
-        Log.d(TAG, "Streaming callback set: ${callback != null}")
     }
 
     // Callback to notify model load completion
@@ -198,6 +241,14 @@ class YOLOView @JvmOverloads constructor(
 
     // Camera config
     private var lensFacing = CameraSelector.LENS_FACING_BACK
+    
+    // Recording 관련 프로퍼티들
+    private var videoCapture: VideoCapture<Recorder>? = null
+    private var recorder: Recorder? = null
+    private var recording: Recording? = null
+    private var isRecording = false
+    private var audioEnabled = true
+    private var recordingCompletionCallback: ((String?, Exception?) -> Unit)? = null
     private lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
     private var camera: Camera? = null
     
@@ -213,6 +264,10 @@ class YOLOView @JvmOverloads constructor(
     private var iouThreshold = 0.45
     private var numItemsThreshold = 30
     private lateinit var zoomLabel: TextView
+
+    // 녹화 중지 타임아웃 핸들러
+    private val recordingStopHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var recordingStopRunnable: Runnable? = null
 
     init {
         // Clear any existing children
@@ -282,7 +337,6 @@ class YOLOView @JvmOverloads constructor(
             }
         })
 
-        Log.d(TAG, "YoloView init: forced TextureView usage for camera preview + overlay on top.")
     }
 
     // region threshold setters
@@ -340,10 +394,9 @@ class YOLOView @JvmOverloads constructor(
                     this.modelName = modelPath.substringAfterLast("/")
                     modelLoadCallback?.invoke(true)
                     callback?.invoke(true)
-                    Log.d(TAG, "Model loaded successfully: $modelPath")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load model: $modelPath", e)
+                logE(TAG, "Failed to load model: $modelPath", e)
                 post {
                     modelLoadCallback?.invoke(false)
                     callback?.invoke(false)
@@ -356,13 +409,11 @@ class YOLOView @JvmOverloads constructor(
         // Try to load labels from model metadata first
         val loadedLabels = YOLOFileUtils.loadLabelsFromAppendedZip(context, modelPath)
         if (loadedLabels != null) {
-            Log.d(TAG, "Labels loaded from model metadata: ${loadedLabels.size} classes")
             return loadedLabels
         }
         
         // Return COCO dataset's 80 classes as a fallback
         // This is much more complete than the previous 7-class hardcoded list
-        Log.d(TAG, "Using COCO classes as fallback")
         return listOf(
             "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
             "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog",
@@ -391,7 +442,6 @@ class YOLOView @JvmOverloads constructor(
         if (allPermissionsGranted()) {
             startCamera()
         }
-        Log.d(TAG, "LifecycleOwner set: ${owner.javaClass.simpleName}")
     }
     
     // region camera init
@@ -428,56 +478,57 @@ class YOLOView @JvmOverloads constructor(
     }
 
     fun startCamera() {
-        Log.d(TAG, "Starting camera...")
 
         try {
             val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
             cameraProviderFuture.addListener({
                 try {
                     val cameraProvider = cameraProviderFuture.get()
-                    Log.d(TAG, "Camera provider obtained")
 
                     val preview = Preview.Builder()
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                        .setTargetResolution(android.util.Size(1920, 1080))
                         .build()
 
                     val imageAnalysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                        .setTargetAspectRatio(AspectRatio.RATIO_4_3)
+                        .setTargetResolution(android.util.Size(320, 320))
                         .build()
 
                     val executor = Executors.newSingleThreadExecutor()
                     imageAnalysis.setAnalyzer(executor) { imageProxy ->
                         onFrame(imageProxy)
                     }
+                    
+                    // VideoCapture 설정 (Recording 용) - 화질 개선
+                    recorder = Recorder.Builder()
+                        .setQualitySelector(QualitySelector.from(Quality.FHD))
+                        .build()
+                    videoCapture = VideoCapture.withOutput(recorder!!)
 
                     val cameraSelector = CameraSelector.Builder()
                         .requireLensFacing(lensFacing)
                         .build()
 
-                    Log.d(TAG, "Unbinding all camera use cases")
                     cameraProvider.unbindAll()
 
                     try {
                         val owner = lifecycleOwner
                         if (owner == null) {
-                            Log.e(TAG, "No LifecycleOwner available. Call onLifecycleOwnerAvailable() first.")
+                            logE(TAG, "No LifecycleOwner available. Call onLifecycleOwnerAvailable() first.")
                             return@addListener
                         }
-
-                        Log.d(TAG, "Binding camera use cases to lifecycle")
                         camera = cameraProvider.bindToLifecycle(
                             owner,
                             cameraSelector,
                             preview,
-                            imageAnalysis
+                            imageAnalysis,
+                            videoCapture
                         )
                         
                         // Reset zoom to 1.0x when camera starts
                         currentZoomRatio = 1.0f
                         onZoomChanged?.invoke(currentZoomRatio)
 
-                        Log.d(TAG, "Setting surface provider to previewView")
                         preview.setSurfaceProvider(previewView.surfaceProvider)
                         
                         // Initialize zoom
@@ -486,19 +537,16 @@ class YOLOView @JvmOverloads constructor(
                             minZoomRatio = cameraInfo.zoomState.value?.minZoomRatio ?: 1.0f
                             maxZoomRatio = cameraInfo.zoomState.value?.maxZoomRatio ?: 1.0f
                             currentZoomRatio = cameraInfo.zoomState.value?.zoomRatio ?: 1.0f
-                            Log.d(TAG, "Zoom initialized - min: $minZoomRatio, max: $maxZoomRatio, current: $currentZoomRatio")
                         }
-                        
-                        Log.d(TAG, "Camera setup completed successfully")
                     } catch (e: Exception) {
-                        Log.e(TAG, "Use case binding failed", e)
+                        logE(TAG, "Use case binding failed", e)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error getting camera provider", e)
+                    logE(TAG, "Error getting camera provider", e)
                 }
             }, ContextCompat.getMainExecutor(context))
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting camera", e)
+            logE(TAG, "Error starting camera", e)
         }
     }
 
@@ -515,26 +563,20 @@ class YOLOView @JvmOverloads constructor(
     
     // Lifecycle methods from DefaultLifecycleObserver
     override fun onStart(owner: LifecycleOwner) {
-        Log.d(TAG, "Lifecycle onStart")
         if (allPermissionsGranted()) {
             startCamera()
         }
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        Log.d(TAG, "Lifecycle onStop")
         // Camera will be automatically stopped by CameraX when lifecycle stops
     }
 
     // region onFrame (per frame inference)
 
     private fun onFrame(imageProxy: ImageProxy) {
-        val w = imageProxy.width
-        val h = imageProxy.height
-        Log.d(TAG, "Processing frame: ${w}x${h}")
-
         val bitmap = ImageUtils.toBitmap(imageProxy) ?: run {
-            Log.e(TAG, "Failed to convert ImageProxy to Bitmap")
+            logE(TAG, "Failed to convert ImageProxy to Bitmap")
             imageProxy.close()
             return
         }
@@ -542,14 +584,13 @@ class YOLOView @JvmOverloads constructor(
         predictor?.let { p ->
             // Check if we should run inference on this frame
             if (!shouldRunInference()) {
-                Log.d(TAG, "Skipping inference due to frequency control")
                 imageProxy.close()
                 return
             }
             
             try {
                 // For camera feed, we typically rotate the bitmap
-                val result = p.predict(bitmap, h, w, rotateForCamera = true)
+                val result = p.predict(bitmap, imageProxy.height, imageProxy.width, rotateForCamera = true)
                 
                 // Apply originalImage if streaming config requires it
                 val resultWithOriginalImage = if (streamConfig?.includeOriginalImage == true) {
@@ -560,9 +601,6 @@ class YOLOView @JvmOverloads constructor(
                 
                 inferenceResult = resultWithOriginalImage
 
-                // Log
-                Log.d(TAG, "Inference complete: ${result.boxes.size} boxes detected")
-                
                 // Callback
                 inferenceCallback?.invoke(resultWithOriginalImage)
                 
@@ -579,19 +617,15 @@ class YOLOView @JvmOverloads constructor(
                         enhancedStreamData["frameNumber"] = frameNumberCounter++
                         
                         callback.invoke(enhancedStreamData)
-                        Log.d(TAG, "Sent streaming data with ${result.boxes.size} detections")
-                    } else {
-                        Log.d(TAG, "Skipping frame output due to throttling")
                     }
                 }
 
                 // Update overlay
                 post {
                     overlayView.invalidate()
-                    Log.d(TAG, "Overlay invalidated for redraw")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error during prediction", e)
+                logE(TAG, "Error during prediction", e)
             }
         }
         imageProxy.close()
@@ -620,22 +654,18 @@ class YOLOView @JvmOverloads constructor(
             isClickable = false
             isFocusable = false
 
-            Log.d(TAG, "OverlayView initialized with enhanced Z-order + hardware acceleration")
+
         }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val result = inferenceResult ?: return
-            
-            Log.d(TAG, "OverlayView onDraw: Drawing result with ${result.boxes.size} boxes")
 
             val iw = result.origShape.width.toFloat()
             val ih = result.origShape.height.toFloat()
 
             val vw = width.toFloat()
             val vh = height.toFloat()
-            
-            Log.d(TAG, "OverlayView dimensions: View(${vw}x${vh}), Image(${iw}x${ih})")
 
             // Scale factor from camera image to view
             val scaleX = vw / iw
@@ -650,15 +680,12 @@ class YOLOView @JvmOverloads constructor(
             
             // Check if using front camera
             val isFrontCamera = lensFacing == CameraSelector.LENS_FACING_FRONT
-            
-            Log.d(TAG, "OverlayView scaling: scale=${scale}, dx=${dx}, dy=${dy}, frontCamera=${isFrontCamera}")
 
             when (task) {
                 // ----------------------------------------
                 // DETECT
                 // ----------------------------------------
                 YOLOTask.DETECT -> {
-                    Log.d(TAG, "Drawing DETECT boxes: ${result.boxes.size}")
                     for (box in result.boxes) {
                         // Adjust alpha based on confidence
                         val alpha = (box.conf * 255).toInt().coerceIn(0, 255)
@@ -671,7 +698,6 @@ class YOLOView @JvmOverloads constructor(
                         )
 
                         // Log the original box.xywh values
-                        Log.d(TAG, "Box raw coords: L=${box.xywh.left}, T=${box.xywh.top}, R=${box.xywh.right}, B=${box.xywh.bottom}, cls=${box.cls}, conf=${box.conf}")
                         
                         // Draw bounding box like in the original code
                         var left   = box.xywh.left   * scale + dx
@@ -687,7 +713,6 @@ class YOLOView @JvmOverloads constructor(
                             bottom = flippedBottom
                         }
                         
-                        Log.d(TAG, "Drawing box for ${box.cls}: L=$left, T=$top, R=$right, B=$bottom, conf=${box.conf}")
 
                         paint.color = newColor
                         paint.style = Paint.Style.STROKE
@@ -1081,33 +1106,27 @@ class YOLOView @JvmOverloads constructor(
             config.maxFPS?.let { maxFPS ->
                 if (maxFPS > 0) {
                     targetFrameInterval = (1_000_000_000L / maxFPS) // Convert to nanoseconds
-                    Log.d(TAG, "maxFPS throttling enabled - target FPS: $maxFPS, interval: ${targetFrameInterval!! / 1_000_000}ms")
                 }
             } ?: run {
                 targetFrameInterval = null
-                Log.d(TAG, "maxFPS throttling disabled")
             }
             
             // Setup throttleInterval (for result output)
             config.throttleIntervalMs?.let { throttleMs ->
                 if (throttleMs > 0) {
                     throttleInterval = throttleMs * 1_000_000L // Convert ms to nanoseconds
-                    Log.d(TAG, "throttleInterval enabled - interval: ${throttleMs}ms")
                 }
             } ?: run {
                 throttleInterval = null
-                Log.d(TAG, "throttleInterval disabled")
             }
             
             // Setup inference frequency control
             config.inferenceFrequency?.let { inferenceFreq ->
                 if (inferenceFreq > 0) {
                     inferenceFrameInterval = (1_000_000_000L / inferenceFreq) // Convert to nanoseconds
-                    Log.d(TAG, "Inference frequency control enabled - target inference FPS: $inferenceFreq, interval: ${inferenceFrameInterval!! / 1_000_000}ms")
                 }
             } ?: run {
                 inferenceFrameInterval = null
-                Log.d(TAG, "Inference frequency control disabled")
             }
             
             // Setup frame skipping
@@ -1115,12 +1134,10 @@ class YOLOView @JvmOverloads constructor(
                 if (skipFrames > 0) {
                     targetSkipFrames = skipFrames
                     frameSkipCount = 0 // Reset counter
-                    Log.d(TAG, "Frame skipping enabled - skip $skipFrames frames between inferences")
                 }
             } ?: run {
                 targetSkipFrames = 0
                 frameSkipCount = 0
-                Log.d(TAG, "Frame skipping disabled")
             }
             
             // Initialize timing
@@ -1230,7 +1247,6 @@ class YOLOView @JvmOverloads constructor(
                         row.map { it.toDouble() }
                     }
                     detection["mask"] = maskDataDouble
-                    Log.d(TAG, "✅ Added mask data (${maskData.size}x${maskData.firstOrNull()?.size ?: 0}) for detection $detectionIndex")
                 }
                 
                 // Add pose keypoints (if available and enabled)
@@ -1248,7 +1264,6 @@ class YOLOView @JvmOverloads constructor(
                         }
                     }
                     detection["keypoints"] = keypointsFlat
-                    Log.d(TAG, "Added keypoints data (${keypoints.xy.size} points) for detection $detectionIndex")
                 }
                 
                 // Add OBB data (if available and enabled)
@@ -1281,23 +1296,21 @@ class YOLOView @JvmOverloads constructor(
                     )
                     
                     detection["obb"] = obbDataMap
-                    Log.d(TAG, "✅ Added OBB data: ${obbResult.cls} (${String.format("%.1f", obbBox.angle * 180.0 / Math.PI)}° rotation)")
+
                 }
                 
                 detections.add(detection)
             }
             
             map["detections"] = detections
-            Log.d(TAG, "Converted ${detections.size} detections to stream data")
         }
         
         // Add performance metrics (if enabled)
         if (config.includeProcessingTimeMs) {
             val processingTimeMs = result.speed.toDouble()
             map["processingTimeMs"] = processingTimeMs
-            Log.d(TAG, "📊 Including processingTimeMs: $processingTimeMs ms (includeProcessingTimeMs=${config.includeProcessingTimeMs})")
         } else {
-            Log.d(TAG, "⚠️ Skipping processingTimeMs (includeProcessingTimeMs=${config.includeProcessingTimeMs})")
+            logW(TAG, "⚠️ Skipping processingTimeMs (includeProcessingTimeMs=${config.includeProcessingTimeMs})")
         }
         
         if (config.includeFps) {
@@ -1311,11 +1324,242 @@ class YOLOView @JvmOverloads constructor(
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
                 val imageData = outputStream.toByteArray()
                 map["originalImage"] = imageData
-                Log.d(TAG, "✅ Added original image data (${imageData.size} bytes)")
             }
         }
         
         return map
+    }
+    
+    // endregion
+    
+    // region Recording Functions
+    
+    fun startRecording(completion: (String?, Exception?) -> Unit) {
+        val videoCapture = this.videoCapture
+        if (videoCapture == null) {
+            completion(null, Exception("VideoCapture가 초기화되지 않았습니다"))
+            return
+        }
+        
+        // 실제 recording 상태와 플래그 동기화 확인
+        if (isRecording && recording != null) {
+            completion(null, Exception("이미 녹화 중입니다"))
+            return
+        } else if (isRecording && recording == null) {
+            // 상태 불일치 - 플래그 재설정
+            logW(TAG, "녹화 상태 불일치 감지 - isRecording은 true이지만 recording 객체가 null")
+            isRecording = false
+        }
+        
+        // 저장 공간 확인 (최소 100MB 필요)
+        val availableSpace = getAvailableStorageSpace()
+        if (availableSpace < 100 * 1024 * 1024) {
+            completion(null, Exception("저장 공간이 부족합니다 (${availableSpace / (1024 * 1024)}MB 사용 가능)"))
+            return
+        }
+        
+        // 고유한 파일 이름 생성
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val fileName = "recording_${timestamp}.mp4"
+        
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            put(android.provider.MediaStore.Video.Media.RELATIVE_PATH, "Movies/YOLORecordings")
+        }
+        
+        val mediaStoreOutputOptions = MediaStoreOutputOptions
+            .Builder(context.contentResolver, android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+            .setContentValues(contentValues)
+            .build()
+
+        val outputOptions = if (audioEnabled) {
+            // 오디오 포함
+            val pendingRecording = recorder!!
+                .prepareRecording(context, mediaStoreOutputOptions)
+                
+            // 오디오 권한 확인
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) 
+                == PackageManager.PERMISSION_GRANTED) {
+                pendingRecording.withAudioEnabled()
+            } else {
+                // 오디오 권한이 없으면 비디오만 녹화
+                logW(TAG, "오디오 권한이 없어 비디오만 녹화합니다")
+                pendingRecording
+            }
+        } else {
+            // 비디오만 녹화
+            recorder!!.prepareRecording(context, mediaStoreOutputOptions)
+        }
+        
+        isRecording = true
+        recordingCompletionCallback = completion
+        
+        recording = outputOptions.start(ContextCompat.getMainExecutor(context)) { recordEvent: VideoRecordEvent ->
+            when (recordEvent) {
+                is VideoRecordEvent.Start -> {
+                    logI(TAG, "녹화 시작됨")
+                }
+                is VideoRecordEvent.Finalize -> {
+                    logI(TAG, "VideoRecordEvent.Finalize 콜백 호출됨 - hasError: ${recordEvent.hasError()}")
+                    
+                    // 녹화 중지 타임아웃이 설정되어 있다면 제거
+                    recordingStopRunnable?.let { recordingStopHandler.removeCallbacks(it) }
+                    recordingStopRunnable = null
+
+                    synchronized(this) {
+                        isRecording = false
+                        val callback = recordingCompletionCallback
+                        recordingCompletionCallback = null
+                        this.recording = null
+                        
+                        if (!recordEvent.hasError()) {
+                            val uri = recordEvent.outputResults.outputUri
+                            logI(TAG, "녹화 완료: $uri")
+                            callback?.invoke(uri.toString(), null)
+                        } else {
+                            val errorCode = recordEvent.error
+                            val errorMsg = when (errorCode) {
+                                VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE -> "저장 공간 부족"
+                                VideoRecordEvent.Finalize.ERROR_INVALID_OUTPUT_OPTIONS -> "잘못된 출력 설정"
+                                VideoRecordEvent.Finalize.ERROR_ENCODING_FAILED -> "비디오 인코딩 실패"
+                                VideoRecordEvent.Finalize.ERROR_RECORDER_ERROR -> "녹화기 오류"
+                                VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA -> "유효한 데이터 없음"
+                                VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE -> "카메라 소스 비활성"
+                                else -> "알 수 없는 오류 (코드: $errorCode)"
+                            }
+                            val error = Exception("녹화 실패: $errorMsg")
+                            logE(TAG, "녹화 실패 - 에러코드: $errorCode, 메시지: $errorMsg", error)
+                            callback?.invoke(null, error)
+                        }
+                    }
+                }
+                is VideoRecordEvent.Status -> {
+                    // Status 이벤트는 너무 자주 발생하므로 로그 생략
+                }
+                is VideoRecordEvent.Pause -> {
+                    logI(TAG, "VideoRecordEvent.Pause - 녹화 일시정지됨")
+                }
+                is VideoRecordEvent.Resume -> {
+                    logI(TAG, "VideoRecordEvent.Resume - 녹화 재개됨")
+                }
+                else -> {
+                    logI(TAG, "기타 VideoRecordEvent: ${recordEvent.javaClass.simpleName}")
+                }
+            }
+        }
+    }
+    
+    private fun getAvailableStorageSpace(): Long {
+        return try {
+            val externalDir = context.getExternalFilesDir(null)
+            if (externalDir != null) {
+                val stat = android.os.StatFs(externalDir.absolutePath)
+                stat.availableBlocksLong * stat.blockSizeLong
+            } else {
+                // Fallback: 내부 저장소 확인
+                val stat = android.os.StatFs(context.filesDir.absolutePath)
+                stat.availableBlocksLong * stat.blockSizeLong
+            }
+        } catch (e: Exception) {
+            logW(TAG, "저장 공간 확인 실패: $e")
+            500L * 1024 * 1024 // 500MB라고 가정
+        }
+    }
+    
+    fun stopRecording(completion: (String?, Exception?) -> Unit) {
+        logI(TAG, "녹화 중지 요청됨 - 현재 상태: isRecording=$isRecording, recording=${this.recording != null}")
+        
+        val recording = this.recording
+        if (recording == null || !isRecording) {
+            logW(TAG, "녹화 중지 실패: 녹화 중이 아님 (recording=$recording, isRecording=$isRecording)")
+            completion(null, Exception("녹화 중이 아닙니다"))
+            return
+        }
+        
+        // 중복 중지 요청 방지
+        if (recordingCompletionCallback != null && recordingCompletionCallback !== completion) {
+            logW(TAG, "녹화 중지 실패: 이미 중지 중")
+            completion(null, Exception("이미 녹화 중지 중입니다"))
+            return
+        }
+        
+        logI(TAG, "녹화 중지 시작...")
+        recordingCompletionCallback = completion
+        
+        // 타임아웃 핸들러 설정
+        recordingStopRunnable = Runnable {
+            synchronized(this) {
+                if (isRecording || this.recording != null) {
+                    logW(TAG, "녹화 중지 타임아웃 - 강제 정리")
+                    isRecording = false
+                    this.recording = null
+                    val callback = recordingCompletionCallback
+                    recordingCompletionCallback = null
+                    callback?.invoke(null, Exception("녹화 중지 타임아웃"))
+                    recordingStopRunnable = null
+                }
+            }
+        }
+        
+        try {
+            logI(TAG, "Recording.stop() 호출 중...")
+            recording.stop()
+            logI(TAG, "Recording.stop() 호출 완료 - 콜백 대기 중...")
+            
+            // 5초 타임아웃 설정
+            recordingStopRunnable?.let { recordingStopHandler.postDelayed(it, 5000) }
+            
+        } catch (e: Exception) {
+            logE(TAG, "녹화 중지 중 오류 발생: $e")
+            recordingStopRunnable?.let { recordingStopHandler.removeCallbacks(it) }
+            recordingStopRunnable = null
+            synchronized(this) {
+                isRecording = false
+                this.recording = null
+                recordingCompletionCallback = null
+            }
+            completion(null, e)
+        }
+    }
+    
+    // 녹화 상태 확인 (더 정확한 상태 체크)
+    fun isRecording(): Boolean {
+        val actualRecording = recording != null
+        val flagState = isRecording
+        
+        // 상태 불일치 감지 및 자동 수정
+        if (flagState != actualRecording) {
+            logW(TAG, "녹화 상태 불일치 감지: flag=$flagState, actual=$actualRecording - 자동 수정")
+            isRecording = actualRecording
+        }
+        
+        return isRecording
+    }
+    
+    // 오디오 활성화/비활성화
+    fun setAudioEnabled(enabled: Boolean) {
+        audioEnabled = enabled
+    }
+    
+    // 강제 녹화 중지 (비상용)
+    fun forceStopRecording() {
+        logW(TAG, "강제 녹화 중지 실행")
+        synchronized(this) {
+            try {
+                recording?.stop()
+            } catch (e: Exception) {
+                logE(TAG, "강제 중지 중 recording.stop() 실패: $e")
+            }
+            
+            isRecording = false
+            recording = null
+            val callback = recordingCompletionCallback
+            recordingCompletionCallback = null
+            
+            callback?.invoke(null, Exception("강제 중지됨"))
+            logI(TAG, "강제 녹화 중지 완료")
+        }
     }
     
     // endregion

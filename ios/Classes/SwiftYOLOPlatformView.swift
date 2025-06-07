@@ -336,6 +336,87 @@ public class SwiftYOLOPlatformView: NSObject, FlutterPlatformView, FlutterStream
             ))
         }
 
+      // Recording methods
+      case "startRecording":
+        if let args = call.arguments as? [String: Any],
+           let includeAudio = args["includeAudio"] as? Bool {
+          print("SwiftYOLOPlatformView: Received startRecording call with includeAudio: \(includeAudio)")
+          
+          // VideoCapture에서 recording 시작
+          guard let yoloView = self.yoloView else {
+            result(FlutterError(code: "not_available", message: "YOLOView not available", details: nil))
+            return
+          }
+          
+          let videoCapture = yoloView.videoCapture
+          
+          videoCapture.startRecording { [weak self] url, error in
+            DispatchQueue.main.async {
+              if let error = error {
+                result(FlutterError(code: "recording_error", message: error.localizedDescription, details: nil))
+              } else if let url = url {
+                result(url.absoluteString)
+              } else {
+                result(FlutterError(code: "recording_error", message: "Recording failed - no URL returned", details: nil))
+              }
+            }
+          }
+        } else {
+          result(FlutterError(code: "invalid_args", message: "Invalid arguments for startRecording", details: nil))
+        }
+
+      case "stopRecording":
+        print("SwiftYOLOPlatformView: Received stopRecording call")
+        
+        guard let yoloView = self.yoloView else {
+          result(FlutterError(code: "not_available", message: "YOLOView not available", details: nil))
+          return
+        }
+        
+        let videoCapture = yoloView.videoCapture
+        
+        videoCapture.stopRecording { [weak self] url, error in
+          DispatchQueue.main.async {
+            if let error = error {
+              result(FlutterError(code: "recording_error", message: error.localizedDescription, details: nil))
+            } else if let url = url {
+              result(url.absoluteString)
+            } else {
+              result(FlutterError(code: "recording_error", message: "Stop recording failed - no URL returned", details: nil))
+            }
+          }
+        }
+
+      case "isRecording":
+        print("SwiftYOLOPlatformView: Received isRecording call")
+        
+        guard let yoloView = self.yoloView else {
+          result(false)
+          return
+        }
+        
+        let videoCapture = yoloView.videoCapture
+        
+        result(videoCapture.isRecording)
+
+      case "setAudioEnabled":
+        if let args = call.arguments as? [String: Any],
+           let enabled = args["enabled"] as? Bool {
+          print("SwiftYOLOPlatformView: Received setAudioEnabled call with enabled: \(enabled)")
+          
+          guard let yoloView = self.yoloView else {
+            result(FlutterError(code: "not_available", message: "YOLOView not available", details: nil))
+            return
+          }
+          
+          let videoCapture = yoloView.videoCapture
+          
+          videoCapture.audioEnabled = enabled
+          result(nil)
+        } else {
+          result(FlutterError(code: "invalid_args", message: "Invalid arguments for setAudioEnabled", details: nil))
+        }
+
       // Additional methods can be added here in the future
 
       default:

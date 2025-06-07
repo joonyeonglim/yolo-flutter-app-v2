@@ -30,7 +30,6 @@ class YOLOInstanceManager {
      */
     fun createInstance(instanceId: String) {
         loadingStates[instanceId] = false
-        Log.d(TAG, "Created instance placeholder: $instanceId")
     }
     
     /**
@@ -71,7 +70,6 @@ class YOLOInstanceManager {
             val yolo = YOLO(context, modelPath, task)
             instances[instanceId] = yolo
             loadingStates[instanceId] = false
-            Log.d(TAG, "Model loaded successfully for instance: $instanceId")
             callback(Result.success(Unit))
         } catch (e: Exception) {
             loadingStates[instanceId] = false
@@ -115,7 +113,6 @@ class YOLOInstanceManager {
     fun removeInstance(instanceId: String) {
         instances.remove(instanceId)
         loadingStates.remove(instanceId)
-        Log.d(TAG, "Removed instance: $instanceId")
     }
     
     /**
@@ -138,6 +135,5 @@ class YOLOInstanceManager {
     fun clearAll() {
         instances.clear()
         loadingStates.clear()
-        Log.d(TAG, "Cleared all instances")
     }
 }

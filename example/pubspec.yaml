@@ -24,6 +24,9 @@ dependencies:
   path_provider: ^2.0.0 # Adjust version as needed
   archive: ^3.0.0 # Adjust version as needed, for unzipping
   http: ^1.0.0 # For downloading models
+  video_player: ^2.8.1 # For video playback
+  shared_preferences: ^2.2.3
+  share_plus: ^9.0.0
 
   ultralytics_yolo:
     # When depending on this package from a real application you should use:

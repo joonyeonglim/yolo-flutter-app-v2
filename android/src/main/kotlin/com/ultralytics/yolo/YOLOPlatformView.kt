@@ -37,7 +37,6 @@ class YOLOPlatformView(
         viewUniqueId = dartViewIdParam as? String ?: viewId.toString().also {
             Log.w(TAG, "YOLOPlatformView[$viewId init]: Using platform int viewId '$it' as fallback for viewUniqueId because Dart 'viewId' was null or not a String.")
         }
-        Log.d(TAG, "YOLOPlatformView[$viewId init]: Initialized with creationParams: $creationParams. Resolved viewUniqueId for channels: $viewUniqueId")
 
         // Parse model path and task from creation params
         var modelPath = creationParams?.get("modelPath") as? String ?: "yolo11n"
@@ -52,7 +51,6 @@ class YOLOPlatformView(
 
         // Set initial thresholds on YOLOView instance from creationParams or defaults.
         // YOLOView.setModel will use these when creating the predictor.
-        Log.d(TAG, "Setting initial thresholds on YOLOView: conf=$confidenceParam, iou=$iouParam")
         yoloView.setConfidenceThreshold(confidenceParam)
         yoloView.setIouThreshold(iouParam)
         // numItemsThreshold defaults within YOLOView.kt
@@ -62,12 +60,10 @@ class YOLOPlatformView(
 
         // Attempt to initialize camera as soon as the view is created.
         // YOLOView.initCamera() handles permissions and starts the camera preview.
-        Log.d(TAG, "Attempting early camera initialization for YOLOView.")
         yoloView.initCamera() // This will attempt to start camera or request permissions
 
         // If context is already a LifecycleOwner, inform YOLOView immediately
         if (context is LifecycleOwner) {
-            Log.d(TAG, "Initial context is a LifecycleOwner (${context.javaClass.simpleName}), notifying YOLOView.")
             yoloView.onLifecycleOwnerAvailable(context)
         } else {
             Log.w(TAG, "Initial context (${context.javaClass.simpleName}) is NOT a LifecycleOwner. YOLOView will wait for one to be provided via notifyLifecycleOwnerAvailable.")
@@ -80,12 +76,10 @@ class YOLOPlatformView(
             // Convert task string to enum
             val task = YOLOTask.valueOf(taskString.uppercase())
             
-            Log.d(TAG, "Initializing YOLOPlatformView with model: $modelPath, task: $task, viewId: $viewId")
             
             // Set up callback for model loading result
             yoloView.setOnModelLoadCallback { success ->
                 if (success) {
-                    Log.d(TAG, "Model loaded successfully: $modelPath.")
                     // Camera initialization was already attempted.
                     // Mark that the full initialization sequence (including model load) is complete.
                     initialized = true
@@ -97,9 +91,6 @@ class YOLOPlatformView(
             
             // YOLOView streaming is now configured separately
             // Keep simple inference callback for compatibility
-            yoloView.setOnInferenceCallback { result ->
-                Log.d(TAG, "*** Inference result received with ${result.boxes.size} detections ***")
-            }
             
             // Load model with the specified path and task
             yoloView.setModel(modelPath, task)
@@ -117,31 +108,26 @@ class YOLOPlatformView(
     // Handle method calls from Flutter
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
-            Log.d(TAG, "Received method call: ${call.method} with arguments: ${call.arguments}")
             
             when (call.method) {
                 "setThreshold" -> {
                     val threshold = call.argument<Double>("threshold") ?: 0.5
-                    Log.d(TAG, "Setting confidence threshold to $threshold")
                     yoloView.setConfidenceThreshold(threshold)
                     result.success(null)
                 }
                 "setConfidenceThreshold" -> {
                     val threshold = call.argument<Double>("threshold") ?: 0.5
-                    Log.d(TAG, "Setting confidence threshold to $threshold")
                     yoloView.setConfidenceThreshold(threshold)
                     result.success(null)
                 }
                 // Support both "setIoUThreshold" (from Dart) and "setIouThreshold" (internal method)
                 "setIoUThreshold", "setIouThreshold" -> {
                     val threshold = call.argument<Double>("threshold") ?: 0.45
-                    Log.d(TAG, "Setting IoU threshold to $threshold")
                     yoloView.setIouThreshold(threshold)
                     result.success(null)
                 }
                 "setNumItemsThreshold" -> {
                     val numItems = call.argument<Int>("numItems") ?: 30
-                    Log.d(TAG, "Setting numItems threshold to $numItems")
                     yoloView.setNumItemsThreshold(numItems)
                     result.success(null)
                 }
@@ -151,34 +137,28 @@ class YOLOPlatformView(
                     val numItemsThreshold = call.argument<Int>("numItemsThreshold")
                     
                     if (confidenceThreshold != null) {
-                        Log.d(TAG, "Setting confidence threshold to $confidenceThreshold")
                         yoloView.setConfidenceThreshold(confidenceThreshold)
                     }
                     if (iouThreshold != null) {
-                        Log.d(TAG, "Setting IoU threshold to $iouThreshold")
                         yoloView.setIouThreshold(iouThreshold)
                     }
                     if (numItemsThreshold != null) {
-                        Log.d(TAG, "Setting numItems threshold to $numItemsThreshold")
                         yoloView.setNumItemsThreshold(numItemsThreshold)
                     }
                     
                     result.success(null)
                 }
                 "switchCamera" -> {
-                    Log.d(TAG, "Switching camera")
                     yoloView.switchCamera()
                     result.success(null)
                 }
                 "setShowUIControls" -> {
                     // Android doesn't have UI controls like iOS, so we just acknowledge the call
-                    Log.d(TAG, "setShowUIControls called, but not applicable for Android")
                     result.success(null)
                 }
                 "setZoomLevel" -> {
                     val zoomLevel = call.argument<Double>("zoomLevel")
                     if (zoomLevel != null) {
-                        Log.d(TAG, "Setting zoom level to $zoomLevel")
                         yoloView.setZoomLevel(zoomLevel.toFloat())
                         result.success(null)
                     } else {
@@ -186,7 +166,6 @@ class YOLOPlatformView(
                     }
                 }
                 "setStreamingConfig" -> {
-                    Log.d(TAG, "Received setStreamingConfig call")
                     val streamConfig = YOLOStreamConfig(
                         includeDetections = call.argument<Boolean>("includeDetections") ?: true,
                         includeClassifications = call.argument<Boolean>("includeClassifications") ?: true,
@@ -202,7 +181,49 @@ class YOLOPlatformView(
                         skipFrames = call.argument<Int>("skipFrames")
                     )
                     yoloView.setStreamConfig(streamConfig)
-                    Log.d(TAG, "YOLOView streaming config updated: $streamConfig")
+                    result.success(null)
+                }
+                "startRecording" -> {
+                    val includeAudio = call.argument<Boolean>("includeAudio") ?: true
+                    
+                    yoloView.startRecording { uri, error ->
+                        if (error != null) {
+                            Log.e(TAG, "Recording start failed: ${error.message}")
+                            result.error("recording_error", error.message, null)
+                        } else if (uri != null) {
+                            Log.d(TAG, "Recording started successfully: $uri")
+                            result.success(uri)
+                        } else {
+                            Log.e(TAG, "Recording start failed: no URI returned")
+                            result.error("recording_error", "Recording failed - no URI returned", null)
+                        }
+                    }
+                }
+                "stopRecording" -> {
+                    Log.d(TAG, "Stopping recording")
+                    
+                    yoloView.stopRecording { uri, error ->
+                        if (error != null) {
+                            Log.e(TAG, "Recording stop failed: ${error.message}")
+                            result.error("recording_error", error.message, null)
+                        } else if (uri != null) {
+                            Log.d(TAG, "Recording stopped successfully: $uri")
+                            result.success(uri)
+                        } else {
+                            Log.e(TAG, "Recording stop failed: no URI returned")
+                            result.error("recording_error", "Stop recording failed - no URI returned", null)
+                        }
+                    }
+                }
+                "isRecording" -> {
+                    val recording = yoloView.isRecording()
+                    Log.d(TAG, "Recording status: $recording")
+                    result.success(recording)
+                }
+                "setAudioEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    Log.d(TAG, "Setting audio enabled: $enabled")
+                    yoloView.setAudioEnabled(enabled)
                     result.success(null)
                 }
                 else -> {
@@ -224,7 +245,6 @@ class YOLOPlatformView(
         val streamingConfigParam = creationParams?.get("streamingConfig") as? Map<String, Any>
         
         val streamConfig = if (streamingConfigParam != null) {
-            Log.d(TAG, "Creating YOLOStreamConfig from creation params: $streamingConfigParam")
             
             // Convert creation params to YOLOStreamConfig
             YOLOStreamConfig(
@@ -251,13 +271,11 @@ class YOLOPlatformView(
             )
         } else {
             // Use default minimal configuration for optimal performance
-            Log.d(TAG, "Using default streaming config")
             YOLOStreamConfig.DEFAULT
         }
         
         // Configure YOLOView with the stream config
         yoloView.setStreamConfig(streamConfig)
-        Log.d(TAG, "YOLOView streaming configured: $streamConfig")
         
         // Set up streaming callback to forward data to Flutter via event channel
         yoloView.setStreamCallback { streamData ->
@@ -271,19 +289,16 @@ class YOLOPlatformView(
      */
     private fun sendStreamDataToFlutter(streamData: Map<String, Any>) {
         try {
-            Log.d(TAG, "Sending stream data to Flutter: ${streamData.keys.joinToString()}")
             
             // Create a runnable to ensure we're on the main thread
             val sendResults = Runnable {
                 try {
                     if (streamHandler is CustomStreamHandler) {
                         val customHandler = streamHandler as CustomStreamHandler
-                        Log.d(TAG, "Using CustomStreamHandler - is sink valid: ${customHandler.isSinkValid()}")
                         
                         // Use the safe send method
                         val sent = customHandler.safelySend(streamData)
                         if (sent) {
-                            Log.d(TAG, "Successfully sent stream data via CustomStreamHandler")
                         } else {
                             Log.w(TAG, "Failed to send stream data via CustomStreamHandler")
                             // Notify Flutter to recreate the channel
@@ -291,22 +306,17 @@ class YOLOPlatformView(
                         }
                     } else {
                         // Use reflection to access the sink property regardless of exact type
-                        Log.d(TAG, "Attempting to access sink via reflection")
                         val fields = streamHandler.javaClass.declaredFields
-                        Log.d(TAG, "Available fields: ${fields.joinToString { it.name }}")
                         
                         val sinkField = streamHandler.javaClass.getDeclaredField("sink")
                         sinkField.isAccessible = true
                         val sink = sinkField.get(streamHandler) as? EventChannel.EventSink
                         
                         if (sink != null) {
-                            Log.d(TAG, "Sending stream data to Flutter via event sink (reflection)")
                             sink.success(streamData)
-                            Log.d(TAG, "Successfully sent stream data via reflection")
                         } else {
                             Log.w(TAG, "Event sink is NOT available via reflection, skipping data")
                             // Try alternative approach - recreate the event channel
-                            Log.d(TAG, "Requesting Flutter to recreate event channel")
                             methodChannel?.invokeMethod("recreateEventChannel", null)
                         }
                     }
@@ -327,12 +337,10 @@ class YOLOPlatformView(
     }
 
     override fun getView(): View {
-        Log.d(TAG, "Getting view: ${yoloView.javaClass.simpleName}")
         
         // Check if context is a LifecycleOwner
         if (context is androidx.lifecycle.LifecycleOwner) {
             val lifecycleOwner = context as androidx.lifecycle.LifecycleOwner
-            Log.d(TAG, "Context is a LifecycleOwner with state: ${lifecycleOwner.lifecycle.currentState}")
         } else {
             Log.e(TAG, "Context is NOT a LifecycleOwner! This may cause camera issues.")
         }
@@ -343,7 +351,6 @@ class YOLOPlatformView(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT
             )
-            Log.d(TAG, "Set layout params for YOLOView")
         }
         
         return yoloView
@@ -362,7 +369,6 @@ class YOLOPlatformView(
      * becomes available or changes.
      */
     fun notifyLifecycleOwnerAvailable(owner: LifecycleOwner) {
-        Log.d(TAG, "LifecycleOwner (${owner.javaClass.simpleName}) is now available for viewId: $viewId. Notifying YOLOView.")
         yoloView.onLifecycleOwnerAvailable(owner)
     }
         
@@ -372,7 +378,6 @@ class YOLOPlatformView(
             permissions: Array<String>, 
             grantResults: IntArray
         ) {
-            Log.d(TAG, "passRequestPermissionsResult called in YOLOPlatformView for viewId $viewId, delegating to yoloView")
             yoloView.onRequestPermissionsResult(requestCode, permissions, grantResults)
         }
         
@@ -383,7 +388,6 @@ class YOLOPlatformView(
          * @param callback Callback to report success/failure
          */
         fun setModel(modelPath: String, task: YOLOTask, callback: ((Boolean) -> Unit)? = null) {
-            Log.d(TAG, "setModel called for viewId $viewId with model: $modelPath, task: $task")
             yoloView.setModel(modelPath, task, callback)
         }
     

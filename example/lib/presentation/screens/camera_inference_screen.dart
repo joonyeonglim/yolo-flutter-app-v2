@@ -1,20 +1,25 @@
 // Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:ultralytics_yolo/yolo_result.dart';
 import 'package:ultralytics_yolo/yolo_view.dart';
-import '../../models/model_type.dart';
-import '../../models/slider_type.dart';
-import '../../services/model_manager.dart';
+import 'package:ultralytics_yolo/yolo_task.dart';
+import 'package:ultralytics_yolo/yolo.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'video_gallery_screen.dart';
+import 'package:share_plus/share_plus.dart';
 
-/// A screen that demonstrates real-time YOLO inference using the device camera.
+/// A screen that demonstrates real-time YOLO classification using the device camera.
 ///
 /// This screen provides:
-/// - Live camera feed with YOLO object detection
-/// - Model selection (detect, segment, classify, pose, obb)
-/// - Adjustable thresholds (confidence, IoU, max detections)
+/// - Live camera feed with YOLO image classification
+/// - Adjustable confidence threshold
 /// - Camera controls (flip, zoom)
 /// - Performance metrics (FPS)
+/// - Top-N classification results display
 class CameraInferenceScreen extends StatefulWidget {
   const CameraInferenceScreen({super.key});
 
@@ -23,79 +28,84 @@ class CameraInferenceScreen extends StatefulWidget {
 }
 
 class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
-  int _detectionCount = 0;
-  double _confidenceThreshold = 0.5;
-  double _iouThreshold = 0.45;
-  int _numItemsThreshold = 30;
+  List<YOLOResult> _classificationResults = [];
+  double _confidenceThreshold = 0.1;
   double _currentFps = 0.0;
   int _frameCount = 0;
   DateTime _lastFpsUpdate = DateTime.now();
 
-  SliderType _activeSlider = SliderType.none;
-  ModelType _selectedModel = ModelType.detect;
+  bool _showConfidenceSlider = false;
   bool _isModelLoading = false;
   String? _modelPath;
   String _loadingMessage = '';
-  double _downloadProgress = 0.0;
   double _currentZoomLevel = 1.0;
   bool _isFrontCamera = false;
+
+  // Recording 관련 변수들
+  bool _isRecording = false;
+  bool _isProcessingRecording = false;
+  String? _recordingPath;
+  bool _isCameraReady = false; // 카메라 준비 상태
 
   final _yoloController = YOLOViewController();
   final _yoloViewKey = GlobalKey<YOLOViewState>();
   final bool _useController = true;
 
-  late final ModelManager _modelManager;
+  // 고정된 모델 경로 - best-n-320-20250501 사용
+  static const String _fixedModelPath = 'best-n-320-20250501';
 
   @override
   void initState() {
     super.initState();
+    _loadModel();
 
-    // Initialize ModelManager
-    _modelManager = ModelManager(
-      onDownloadProgress: (progress) {
-        if (mounted) {
-          setState(() {
-            _downloadProgress = progress;
-          });
-        }
-      },
-      onStatusUpdate: (message) {
-        if (mounted) {
-          setState(() {
-            _loadingMessage = message;
-          });
-        }
-      },
-    );
-
-    // Load initial model
-    _loadModelForPlatform();
-
-    // Set initial thresholds after frame
+    // Set initial threshold after frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_useController) {
         _yoloController.setThresholds(
           confidenceThreshold: _confidenceThreshold,
-          iouThreshold: _iouThreshold,
-          numItemsThreshold: _numItemsThreshold,
+          iouThreshold: 0.45, // IoU는 classification에서 사용되지 않지만 기본값 설정
+          numItemsThreshold: 30,
         );
       } else {
         _yoloViewKey.currentState?.setThresholds(
           confidenceThreshold: _confidenceThreshold,
-          iouThreshold: _iouThreshold,
-          numItemsThreshold: _numItemsThreshold,
+          iouThreshold: 0.45,
+          numItemsThreshold: 30,
         );
       }
     });
+
+    // 주기적으로 녹화 상태 동기화 (3초마다)
+    Timer.periodic(const Duration(seconds: 3), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      _syncRecordingState();
+    });
   }
 
-  /// Called when new detection results are available
-  ///
-  /// Updates the UI with:
-  /// - Number of detections
-  /// - FPS calculation
-  /// - Debug information for first few detections
-  void _onDetectionResults(List<YOLOResult> results) {
+  /// 녹화 상태를 주기적으로 동기화
+  Future<void> _syncRecordingState() async {
+    if (_isProcessingRecording) return;
+    
+    try {
+      final actualState = await _yoloController.isRecording();
+      if (mounted && _isRecording != actualState) {
+        print('[YOLO DEBUG] 🔄 상태 동기화: UI($_isRecording) → Native($actualState)');
+        setState(() {
+          _isRecording = actualState;
+        });
+      }
+    } catch (e) {
+      // 상태 확인 실패 시 조용히 처리
+      print('[YOLO DEBUG] ⚠️ 상태 동기화 실패: $e');
+    }
+  }
+
+  /// Called when new classification results are available
+  void _onClassificationResults(List<YOLOResult> results) {
     if (!mounted) return;
 
     _frameCount++;
@@ -104,24 +114,155 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
 
     if (elapsed >= 1000) {
       final calculatedFps = _frameCount * 1000 / elapsed;
-      debugPrint('Calculated FPS: ${calculatedFps.toStringAsFixed(1)}');
-
       _currentFps = calculatedFps;
       _frameCount = 0;
       _lastFpsUpdate = now;
     }
 
-    // Still update detection count in the UI
+    // Filter and sort results
+    final filteredResults = results
+        .where((r) => r.confidence >= _confidenceThreshold)
+        .toList();
+    
+    // Sort by confidence (highest first)
+    filteredResults.sort((a, b) => b.confidence.compareTo(a.confidence));
+
     setState(() {
-      _detectionCount = results.length;
+      _classificationResults = filteredResults.take(5).toList(); // Top 5 results
+    });
+  }
+
+  /// Recording 시작/중지 (네이티브 상태 기반)
+  Future<void> _toggleRecording() async {
+    // 중복 요청 및 카메라 미준비 상태 방지
+    if (_isProcessingRecording || !_isCameraReady) {
+      print('[YOLO DEBUG] 녹화 토글 무시: 처리 중($_isProcessingRecording) 또는 카메라 미준비(!$_isCameraReady)');
+      return;
+    }
+    
+    setState(() {
+      _isProcessingRecording = true;
     });
 
-    // Debug first few detections
-    for (var i = 0; i < results.length && i < 3; i++) {
-      final r = results[i];
-      debugPrint(
-        'Detection $i: ${r.className} (${(r.confidence * 100).toStringAsFixed(1)}%) at ${r.boundingBox}',
-      );
+    try {
+      print('[YOLO DEBUG] === 녹화 토글 시작 ===');
+      
+      // 네이티브에서 실제 녹화 상태 확인
+      final isCurrentlyRecording = await _yoloController.isRecording();
+      print('[YOLO DEBUG] 네이티브 녹화 상태: $isCurrentlyRecording');
+      print('[YOLO DEBUG] 현재 UI 상태: $_isRecording');
+      
+      if (isCurrentlyRecording) {
+        // 녹화 중지
+        print('[YOLO DEBUG] 🛑 녹화 중지 시도');
+        final videoPath = await _yoloController.stopRecording();
+        print('[YOLO DEBUG] 🛑 녹화 중지 완료: $videoPath');
+        
+        if(mounted) {
+          setState(() {
+            _isRecording = false;
+            _recordingPath = videoPath;
+          });
+        }
+        
+        // Android에서 SharedPreferences에 비디오 경로 저장
+        if (Platform.isAndroid && videoPath != null) {
+          final prefs = await SharedPreferences.getInstance();
+          final List<String> videoPaths = prefs.getStringList('recorded_videos') ?? [];
+          if (!videoPaths.contains(videoPath)) {
+            videoPaths.add(videoPath);
+            await prefs.setStringList('recorded_videos', videoPaths);
+          }
+        }
+        
+        if (mounted) {
+          if (videoPath != null) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('녹화 완료: $videoPath'),
+                duration: const Duration(seconds: 3),
+                action: SnackBarAction(
+                  label: '공유',
+                  onPressed: () => _shareRecording(videoPath),
+                ),
+              ),
+            );
+          } else {
+             ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('녹화가 중지되었지만 비디오를 저장하지 못했습니다.'),
+                backgroundColor: Colors.orange,
+              ),
+            );
+          }
+        }
+      } else {
+        // 녹화 시작
+        print('[YOLO DEBUG] ▶️ 녹화 시작 시도');
+        final videoPath = await _yoloController.startRecording();
+        print('[YOLO DEBUG] ▶️ 녹화 시작 완료: $videoPath');
+        
+        if (mounted) {
+          setState(() {
+            _isRecording = true;
+            _recordingPath = videoPath;
+          });
+        }
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('녹화 시작됨'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      print('[YOLO DEBUG] ❌ 녹화 토글 오류: $e');
+      
+      // 오류 발생 시 네이티브 상태로 Flutter 상태 동기화
+      try {
+        final actualState = await _yoloController.isRecording();
+        if(mounted) {
+          setState(() {
+            _isRecording = actualState;
+          });
+        }
+        print('[YOLO DEBUG] 상태 동기화 완료: $_isRecording');
+      } catch (syncError) {
+        print('[YOLO DEBUG] 상태 동기화 실패: $syncError');
+        if (mounted) {
+          setState(() {
+            _isRecording = false;
+          });
+        }
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('녹화 오류: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      print('[YOLO DEBUG] === 녹화 토글 완료 ===');
+      if (mounted) {
+        setState(() {
+          _isProcessingRecording = false;
+        });
+      }
+    }
+  }
+
+  /// 녹화된 비디오 공유
+  void _shareRecording(String path) {
+    try {
+      Share.shareXFiles([XFile(path)], text: 'YOLO 새 분류 영상');
+    } catch (e) {
+      print('Sharing video failed: $e');
     }
   }
 
@@ -130,7 +271,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     return Scaffold(
       body: Stack(
         children: [
-          // YOLO View: must be at back
+          // YOLO View
           if (_modelPath != null && !_isModelLoading)
             YOLOView(
               key: _useController
@@ -138,8 +279,8 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                   : _yoloViewKey,
               controller: _useController ? _yoloController : null,
               modelPath: _modelPath!,
-              task: _selectedModel.task,
-              onResult: _onDetectionResults,
+              task: YOLOTask.classify, // Classification task
+              onResult: _onClassificationResults,
               onPerformanceMetrics: (metrics) {
                 if (mounted) {
                   setState(() {
@@ -168,7 +309,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                         'assets/logo.png',
                         width: 120,
                         height: 120,
-                        color: Colors.white.withValues(alpha: 0.8),
+                        color: Colors.white.withOpacity(0.8),
                       ),
                       const SizedBox(height: 32),
                       // Loading message
@@ -182,62 +323,74 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                         textAlign: TextAlign.center,
                       ),
                       const SizedBox(height: 24),
-                      // Progress indicator
-                      if (_downloadProgress > 0)
-                        Column(
-                          children: [
-                            SizedBox(
-                              width: 200,
-                              child: LinearProgressIndicator(
-                                value: _downloadProgress,
-                                backgroundColor: Colors.white24,
-                                valueColor: const AlwaysStoppedAnimation<Color>(
-                                  Colors.white,
-                                ),
-                                minHeight: 4,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              '${(_downloadProgress * 100).toInt()}%',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
-                        )
-                      else
-                        const CircularProgressIndicator(color: Colors.white),
+                      const CircularProgressIndicator(color: Colors.white),
                     ],
                   ),
                 ),
               ),
             ),
 
-          // Top info pills (detection, FPS, and current threshold)
+          // Top info (FPS and confidence threshold)
           Positioned(
-            top: MediaQuery.of(context).padding.top + 16, // Safe area + spacing
+            top: MediaQuery.of(context).padding.top + 16,
             left: 16,
             right: 16,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Model selector
-                _buildModelSelector(),
+                // Title with recording indicator
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.6),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_isRecording) ...[
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: const BoxDecoration(
+                                color: Colors.red,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
+                          const Text(
+                            'BIRD CLASSIFICATION',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          if (_isRecording) ...[
+                            const SizedBox(width: 8),
+                            const Text(
+                              'REC',
+                              style: TextStyle(
+                                color: Colors.red,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 12),
                 IgnorePointer(
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        'DETECTIONS: $_detectionCount',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
                       Text(
                         'FPS: ${_currentFps.toStringAsFixed(1)}',
                         style: const TextStyle(
@@ -245,23 +398,91 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      const SizedBox(width: 16),
+                      Text(
+                        'THRESHOLD: ${_confidenceThreshold.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                if (_activeSlider == SliderType.confidence)
-                  _buildTopPill(
-                    'CONFIDENCE THRESHOLD: ${_confidenceThreshold.toStringAsFixed(2)}',
-                  ),
-                if (_activeSlider == SliderType.iou)
-                  _buildTopPill(
-                    'IOU THRESHOLD: ${_iouThreshold.toStringAsFixed(2)}',
-                  ),
-                if (_activeSlider == SliderType.numItems)
-                  _buildTopPill('ITEMS MAX: $_numItemsThreshold'),
               ],
             ),
           ),
+
+          // Classification results display
+          if (_classificationResults.isNotEmpty)
+            Positioned(
+              top: MediaQuery.of(context).padding.top + 120,
+              left: 16,
+              right: 16,
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TOP PREDICTIONS',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._classificationResults.map((result) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 2,
+                            child: Text(
+                              result.className ?? 'Unknown',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 3,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: LinearProgressIndicator(
+                                    value: result.confidence,
+                                    backgroundColor: Colors.white24,
+                                    valueColor: const AlwaysStoppedAnimation<Color>(
+                                      Colors.yellow,
+                                    ),
+                                    minHeight: 3,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${(result.confidence * 100).toInt()}%',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )),
+                  ],
+                ),
+              ),
+            ),
 
           // Center logo - only show when camera is active
           if (_modelPath != null && !_isModelLoading)
@@ -274,7 +495,7 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                     heightFactor: 0.5,
                     child: Image.asset(
                       'assets/logo.png',
-                      color: Colors.white.withValues(alpha: 0.4),
+                      color: Colors.white.withOpacity(0.2),
                     ),
                   ),
                 ),
@@ -287,6 +508,21 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
             right: 16,
             child: Column(
               children: [
+                // Recording button
+                _buildIconButton(
+                  _isProcessingRecording || !_isCameraReady
+                    ? Icons.hourglass_empty 
+                    : (_isRecording ? Icons.stop : Icons.videocam),
+                  _isProcessingRecording || !_isCameraReady ? () {} : _toggleRecording,
+                  backgroundColor: _isRecording 
+                    ? Colors.red 
+                    : (_isProcessingRecording || !_isCameraReady
+                      ? Colors.orange 
+                      : Colors.black.withOpacity(0.5)),
+                  iconColor: Colors.white,
+                ),
+                const SizedBox(height: 12),
+                
                 if (!_isFrontCamera) ...[
                   _buildCircleButton(
                     '${_currentZoomLevel.toStringAsFixed(1)}x',
@@ -305,24 +541,18 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                   ),
                   const SizedBox(height: 12),
                 ],
-                _buildIconButton(Icons.layers, () {
-                  _toggleSlider(SliderType.numItems);
-                }),
-                const SizedBox(height: 12),
-                _buildIconButton(Icons.adjust, () {
-                  _toggleSlider(SliderType.confidence);
-                }),
-                const SizedBox(height: 12),
-                _buildIconButton('assets/iou.png', () {
-                  _toggleSlider(SliderType.iou);
+                _buildIconButton(Icons.tune, () {
+                  setState(() {
+                    _showConfidenceSlider = !_showConfidenceSlider;
+                  });
                 }),
                 const SizedBox(height: 40),
               ],
             ),
           ),
 
-          // Bottom slider overlay
-          if (_activeSlider != SliderType.none)
+          // Bottom confidence slider overlay
+          if (_showConfidenceSlider)
             Positioned(
               left: 0,
               right: 0,
@@ -332,53 +562,92 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
                   horizontal: 24,
                   vertical: 12,
                 ),
-                color: Colors.black.withValues(alpha: 0.8),
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: Colors.yellow,
-                    inactiveTrackColor: Colors.white.withValues(alpha: 0.3),
-                    thumbColor: Colors.yellow,
-                    overlayColor: Colors.yellow.withValues(alpha: 0.2),
-                  ),
-                  child: Slider(
-                    value: _getSliderValue(),
-                    min: _getSliderMin(),
-                    max: _getSliderMax(),
-                    divisions: _getSliderDivisions(),
-                    label: _getSliderLabel(),
-                    onChanged: (value) {
-                      setState(() {
-                        _updateSliderValue(value);
-                      });
-                    },
-                  ),
+                color: Colors.black.withOpacity(0.8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'CONFIDENCE THRESHOLD: ${_confidenceThreshold.toStringAsFixed(2)}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: Colors.yellow,
+                        inactiveTrackColor: Colors.white.withOpacity(0.3),
+                        thumbColor: Colors.yellow,
+                        overlayColor: Colors.yellow.withOpacity(0.2),
+                      ),
+                      child: Slider(
+                        value: _confidenceThreshold,
+                        min: 0.1,
+                        max: 0.9,
+                        divisions: 8,
+                        label: _confidenceThreshold.toStringAsFixed(1),
+                        onChanged: (value) {
+                          setState(() {
+                            _confidenceThreshold = value;
+                          });
+                          if (_useController) {
+                            _yoloController.setConfidenceThreshold(value);
+                          } else {
+                            _yoloViewKey.currentState?.setConfidenceThreshold(value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          // Camera flip top-right
+
+          // Bottom left buttons
           Positioned(
-            bottom: MediaQuery.of(context).padding.top + 16,
+            bottom: 32,
             left: 16,
-            child: CircleAvatar(
-              radius: 24,
-              backgroundColor: Colors.black.withValues(alpha: 0.5),
-              child: IconButton(
-                icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
-                onPressed: () {
-                  setState(() {
-                    _isFrontCamera = !_isFrontCamera;
-                    // Reset zoom level when switching to front camera
-                    if (_isFrontCamera) {
-                      _currentZoomLevel = 1.0;
-                    }
-                  });
-                  if (_useController) {
-                    _yoloController.switchCamera();
-                  } else {
-                    _yoloViewKey.currentState?.switchCamera();
-                  }
-                },
-              ),
+            child: Column(
+              children: [
+                // Gallery button
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: Colors.black.withOpacity(0.5),
+                  child: IconButton(
+                    icon: const Icon(Icons.video_library, color: Colors.white),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => const VideoGalleryScreen(),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Camera flip button
+                CircleAvatar(
+                  radius: 24,
+                  backgroundColor: Colors.black.withOpacity(0.5),
+                  child: IconButton(
+                    icon: const Icon(Icons.flip_camera_ios, color: Colors.white),
+                    onPressed: () {
+                      setState(() {
+                        _isFrontCamera = !_isFrontCamera;
+                        if (_isFrontCamera) {
+                          _currentZoomLevel = 1.0;
+                        }
+                      });
+                      if (_useController) {
+                        _yoloController.switchCamera();
+                      } else {
+                        _yoloViewKey.currentState?.switchCamera();
+                      }
+                    },
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -386,36 +655,26 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     );
   }
 
-  /// Builds a circular button with an icon or image
-  ///
-  /// [iconOrAsset] can be either an IconData or an asset path string
-  /// [onPressed] is called when the button is tapped
-  Widget _buildIconButton(dynamic iconOrAsset, VoidCallback onPressed) {
+  Widget _buildIconButton(
+    IconData icon, 
+    VoidCallback onPressed, {
+    Color? backgroundColor,
+    Color? iconColor,
+  }) {
     return CircleAvatar(
       radius: 24,
-      backgroundColor: Colors.black.withValues(alpha: 0.2),
+      backgroundColor: backgroundColor ?? Colors.black.withOpacity(0.2),
       child: IconButton(
-        icon: iconOrAsset is IconData
-            ? Icon(iconOrAsset, color: Colors.white)
-            : Image.asset(
-                iconOrAsset,
-                width: 24,
-                height: 24,
-                color: Colors.white,
-              ),
+        icon: Icon(icon, color: iconColor ?? Colors.white),
         onPressed: onPressed,
       ),
     );
   }
 
-  /// Builds a circular button with text
-  ///
-  /// [label] is the text to display in the button
-  /// [onPressed] is called when the button is tapped
   Widget _buildCircleButton(String label, {required VoidCallback onPressed}) {
     return CircleAvatar(
       radius: 24,
-      backgroundColor: Colors.black.withValues(alpha: 0.2),
+      backgroundColor: Colors.black.withOpacity(0.2),
       child: TextButton(
         onPressed: onPressed,
         child: Text(label, style: const TextStyle(color: Colors.white)),
@@ -423,111 +682,6 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     );
   }
 
-  /// Toggles the active slider type
-  ///
-  /// If the same slider type is selected again, it will be hidden.
-  /// Otherwise, the new slider type will be shown.
-  void _toggleSlider(SliderType type) {
-    setState(() {
-      _activeSlider = (_activeSlider == type) ? SliderType.none : type;
-    });
-  }
-
-  /// Builds a pill-shaped container with text
-  ///
-  /// [label] is the text to display in the pill
-  Widget _buildTopPill(String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-    );
-  }
-
-  /// Gets the current value for the active slider
-  double _getSliderValue() {
-    switch (_activeSlider) {
-      case SliderType.numItems:
-        return _numItemsThreshold.toDouble();
-      case SliderType.confidence:
-        return _confidenceThreshold;
-      case SliderType.iou:
-        return _iouThreshold;
-      default:
-        return 0;
-    }
-  }
-
-  /// Gets the minimum value for the active slider
-  double _getSliderMin() => _activeSlider == SliderType.numItems ? 5 : 0.1;
-
-  /// Gets the maximum value for the active slider
-  double _getSliderMax() => _activeSlider == SliderType.numItems ? 50 : 0.9;
-
-  /// Gets the number of divisions for the active slider
-  int _getSliderDivisions() => _activeSlider == SliderType.numItems ? 9 : 8;
-
-  /// Gets the label text for the active slider
-  String _getSliderLabel() {
-    switch (_activeSlider) {
-      case SliderType.numItems:
-        return '$_numItemsThreshold';
-      case SliderType.confidence:
-        return _confidenceThreshold.toStringAsFixed(1);
-      case SliderType.iou:
-        return _iouThreshold.toStringAsFixed(1);
-      default:
-        return '';
-    }
-  }
-
-  /// Updates the value of the active slider
-  ///
-  /// This method updates both the UI state and the YOLO view controller
-  /// with the new threshold value.
-  void _updateSliderValue(double value) {
-    switch (_activeSlider) {
-      case SliderType.numItems:
-        _numItemsThreshold = value.toInt();
-        if (_useController) {
-          _yoloController.setNumItemsThreshold(_numItemsThreshold);
-        } else {
-          _yoloViewKey.currentState?.setNumItemsThreshold(_numItemsThreshold);
-        }
-        break;
-      case SliderType.confidence:
-        _confidenceThreshold = value;
-        if (_useController) {
-          _yoloController.setConfidenceThreshold(value);
-        } else {
-          _yoloViewKey.currentState?.setConfidenceThreshold(value);
-        }
-        break;
-      case SliderType.iou:
-        _iouThreshold = value;
-        if (_useController) {
-          _yoloController.setIoUThreshold(value);
-        } else {
-          _yoloViewKey.currentState?.setIoUThreshold(value);
-        }
-        break;
-      default:
-        break;
-    }
-  }
-
-  /// Sets the camera zoom level
-  ///
-  /// Updates both the UI state and the YOLO view controller with the new zoom level.
   void _setZoomLevel(double zoomLevel) {
     setState(() {
       _currentZoomLevel = zoomLevel;
@@ -539,114 +693,38 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
     }
   }
 
-  /// Builds the model selector widget
-  ///
-  /// Creates a row of buttons for selecting different YOLO model types.
-  /// Each button shows the model type name and highlights the selected model.
-  Widget _buildModelSelector() {
-    return Container(
-      height: 36,
-      padding: const EdgeInsets.all(2),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: ModelType.values.map((model) {
-          final isSelected = _selectedModel == model;
-          return GestureDetector(
-            onTap: () {
-              if (!_isModelLoading && model != _selectedModel) {
-                setState(() {
-                  _selectedModel = model;
-                });
-                _loadModelForPlatform();
-              }
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.white : Colors.transparent,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                model.name.toUpperCase(),
-                style: TextStyle(
-                  color: isSelected ? Colors.black : Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  Future<void> _loadModelForPlatform() async {
+  Future<void> _loadModel() async {
     setState(() {
       _isModelLoading = true;
-      _loadingMessage = 'Loading ${_selectedModel.modelName} model...';
-      _downloadProgress = 0.0;
-      // Reset metrics when switching models
-      _detectionCount = 0;
-      _currentFps = 0.0;
-      _frameCount = 0;
-      _lastFpsUpdate = DateTime.now();
+      _loadingMessage = 'Loading bird classification model...';
     });
 
     try {
-      // Use ModelManager to get the model path
-      // This will automatically download if not found locally
-      final modelPath = await _modelManager.getModelPath(_selectedModel);
+      // 모델 경로 설정
+      setState(() {
+        _modelPath = _fixedModelPath;
+        _isModelLoading = false;
+        _loadingMessage = '';
+      });
 
-      if (mounted) {
-        setState(() {
-          _modelPath = modelPath;
-          _isModelLoading = false;
-          _loadingMessage = '';
-          _downloadProgress = 0.0;
-        });
+      // Warm up camera after model is loaded and view is likely built
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _warmUpCamera();
+      });
 
-        if (modelPath != null) {
-          debugPrint('CameraInferenceScreen: Model path set to: $modelPath');
-        } else {
-          // Model loading failed
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Model Not Available'),
-              content: Text(
-                'Failed to load ${_selectedModel.modelName} model. Please check your internet connection and try again.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
-          );
-        }
-      }
     } catch (e) {
       debugPrint('Error loading model: $e');
       if (mounted) {
         setState(() {
           _isModelLoading = false;
           _loadingMessage = 'Failed to load model';
-          _downloadProgress = 0.0;
         });
-        // Show error dialog
+        
         showDialog(
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('Model Loading Error'),
-            content: Text(
-              'Failed to load ${_selectedModel.modelName} model: ${e.toString()}',
-            ),
+            content: Text('Failed to load bird classification model: ${e.toString()}'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
@@ -655,6 +733,35 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
             ],
           ),
         );
+      }
+    }
+  }
+
+  Future<void> _warmUpCamera() async {
+    // A workaround for some devices where the first recording might fail.
+    if (!mounted || _isCameraReady) return;
+    
+    try {
+      print('[YOLO DEBUG] 📸 Warming up camera...');
+      // A short delay might be needed for the view to be fully initialized.
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _yoloController.startRecording();
+      await Future.delayed(const Duration(milliseconds: 200));
+      final videoPath = await _yoloController.stopRecording();
+      print('[YOLO DEBUG] 📸 Camera warm-up successful. Dummy video at: $videoPath');
+      
+      if (mounted) {
+        setState(() {
+          _isCameraReady = true;
+        });
+      }
+    } catch (e) {
+      print('[YOLO DEBUG] ⚠️ Camera warm-up failed (this might be ok): $e');
+      // Still set to ready, as warm-up is not critical on all devices.
+      if (mounted) {
+        setState(() {
+          _isCameraReady = true;
+        });
       }
     }
   }

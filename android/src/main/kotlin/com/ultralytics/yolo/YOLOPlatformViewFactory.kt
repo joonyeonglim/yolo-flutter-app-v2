@@ -25,7 +25,6 @@ class CustomStreamHandler(private val viewId: Int) : EventChannel.StreamHandler 
     private var sinkSetTime: Long = 0
     
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
-        Log.d(TAG, "Event channel for view $viewId started listening")
         
         // Ensure we're on the main thread for sink operations
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
@@ -42,20 +41,17 @@ class CustomStreamHandler(private val viewId: Int) : EventChannel.StreamHandler 
     private fun handleOnListen(arguments: Any?, events: EventChannel.EventSink?) {
         sink = events
         sinkSetTime = System.currentTimeMillis()
-        Log.d(TAG, "Sink set on main thread at ${sinkSetTime}, sink: $sink")
         
         if (events == null) {
             Log.w(TAG, "onListen called with null EventSink!")
         } else {
             // Test the sink by sending a simple message
             try {
-                Log.d(TAG, "Testing event sink with a test message")
                 events.success(mapOf(
                     "test" to "Event channel active", 
                     "viewId" to viewId,
                     "timestamp" to System.currentTimeMillis()
                 ))
-                Log.d(TAG, "Test message sent successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending test message to event sink", e)
             }
@@ -65,14 +61,12 @@ class CustomStreamHandler(private val viewId: Int) : EventChannel.StreamHandler 
             mainHandler.postDelayed({
                 try {
                     if (sink != null) {
-                        Log.d(TAG, "Sending delayed test message to verify sink")
                         sink?.success(mapOf(
                             "test" to "Event sink verification", 
                             "viewId" to viewId,
                             "timestamp" to System.currentTimeMillis(),
                             "sinkAge" to (System.currentTimeMillis() - sinkSetTime)
                         ))
-                        Log.d(TAG, "Delayed test message sent successfully")
                     } else {
                         Log.w(TAG, "Sink no longer available for delayed test")
                     }
@@ -84,18 +78,15 @@ class CustomStreamHandler(private val viewId: Int) : EventChannel.StreamHandler 
     }
     
     override fun onCancel(arguments: Any?) {
-        Log.d(TAG, "Event channel for view $viewId cancelled after ${System.currentTimeMillis() - sinkSetTime}ms, clearing sink")
         
         // Ensure we're on the main thread for sink operations
         if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
             val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
             mainHandler.post {
                 sink = null
-                Log.d(TAG, "Sink cleared on main thread")
             }
         } else {
             sink = null
-            Log.d(TAG, "Sink cleared directly")
         }
     }
     
@@ -146,7 +137,6 @@ class YOLOPlatformViewFactory(
     // Store activity reference to pass to the YOLOPlatformView
     fun setActivity(activity: Activity?) {
         this.activity = activity
-        Log.d(TAG, "Activity set: ${activity?.javaClass?.simpleName}")
 
         // If activity is available, notify all active views
         if (activity != null) {
@@ -162,7 +152,6 @@ class YOLOPlatformViewFactory(
                         // Assuming YoloPlatformView has a public 'viewId' property or a getter.
                         // If not, you might need to adjust how you log this.
                         // For now, let's assume view.viewId is accessible or use a placeholder.
-                        Log.d(TAG, "Notified YoloPlatformView (viewId: ${view.hashCode()}) that activity is available.")
                     } else {
                         Log.w(TAG, "Activity is not a LifecycleOwner, cannot notify view ${view.hashCode()}")
                     }
@@ -178,22 +167,17 @@ class YOLOPlatformViewFactory(
         
         // Use activity if available, otherwise use the provided context
         val effectiveContext = activity ?: context
-        Log.d(TAG, "Creating YOLOPlatformView with context: ${effectiveContext.javaClass.simpleName}, platform int viewId: $viewId")
-        Log.d(TAG, "Raw creationParams from Dart: $args")
 
         // Get the unique ID for this view
         val dartViewIdParam = creationParams?.get("viewId")
-        Log.d(TAG, "Extracted 'viewId' from creationParams: $dartViewIdParam (type: ${dartViewIdParam?.javaClass?.name})")
         val viewUniqueId = dartViewIdParam as? String ?: viewId.toString().also {
             Log.w(TAG, "Using platform int viewId '$it' as fallback for viewUniqueId because Dart 'viewId' was null or not a String.")
         }
-        Log.d(TAG, "Resolved viewUniqueId for channel naming: $viewUniqueId")
         
         // Create event channel for detection results
         val resultChannelName = "com.ultralytics.yolo/detectionResults_$viewUniqueId"
         val controlChannelName = "com.ultralytics.yolo/controlChannel_$viewUniqueId"
         
-        Log.d(TAG, "Final channel names - Result: $resultChannelName, Control: $controlChannelName")
         
         // Event channel for streaming detection results
         val eventChannel = EventChannel(messenger, resultChannelName)
@@ -202,7 +186,6 @@ class YOLOPlatformViewFactory(
         
         // Create stream handler for detection results
         val eventHandler = CustomStreamHandler(viewId)
-        Log.d(TAG, "Created CustomStreamHandler for view $viewId")
         
         // Set event handler and store it
         eventChannel.setStreamHandler(eventHandler)
@@ -218,7 +201,6 @@ class YOLOPlatformViewFactory(
             this // Pass the factory itself for disposal callback
         )
         activeViews[viewId] = platformView
-        Log.d(TAG, "Created and stored YOLOPlatformView for viewId: $viewId")
         return platformView
     }
     
@@ -226,13 +208,11 @@ class YOLOPlatformViewFactory(
     internal fun onPlatformViewDisposed(viewId: Int) {
         activeViews.remove(viewId)
         eventChannelHandlers.remove(viewId) // Assuming CustomStreamHandler doesn't need explicit cancel on its EventChannel
-        Log.d(TAG, "YOLOPlatformView for viewId $viewId disposed and removed from factory.")
     }
     
     fun dispose() { // Called when the FlutterEngine is detached
         // Clean up event channels when the plugin is disposed
         eventChannelHandlers.clear()
         activeViews.clear()
-        Log.d(TAG, "YOLOPlatformViewFactory disposed, all views and handlers cleared.")
     }
 }

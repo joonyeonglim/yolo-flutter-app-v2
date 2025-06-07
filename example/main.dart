@@ -22,10 +22,10 @@ class YOLOScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('YOLO Detection')),
+      appBar: AppBar(title: const Text('YOLO Classification')),
       body: YOLOView(
-        modelPath: 'yolo11n',
-        task: YOLOTask.detect,
+        modelPath: 'best-n-320-20250501',
+        task: YOLOTask.classify,
         onResult: (results) {
           for (final result in results) {
             debugPrint('${result.className}: ${result.confidence}');
@@ -54,7 +54,7 @@ class _SingleImageExampleState extends State<SingleImageExample> {
   }
 
   Future<void> _initializeYOLO() async {
-    _yolo = YOLO(modelPath: 'yolo11n', task: YOLOTask.detect);
+    _yolo = YOLO(modelPath: 'best-n-320-20250501', task: YOLOTask.classify);
     await _yolo!.loadModel();
   }
 
