@@ -1,0 +1,6 @@
+framework module ultralytics_yolo {
+  umbrella header "ultralytics_yolo-umbrella.h"
+
+  export *
+  module * { export * }
+}

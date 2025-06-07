@@ -175,6 +175,21 @@ class YOLOPlatformView(
                     Log.d(TAG, "setShowUIControls called, but not applicable for Android")
                     result.success(null)
                 }
+                "stop" -> {
+                    Log.d(TAG, "Stopping camera and inference")
+                    yoloView.stopCamera()
+                    result.success(null)
+                }
+                "pause" -> {
+                    Log.d(TAG, "Pausing camera and inference")
+                    yoloView.pauseCamera()
+                    result.success(null)
+                }
+                "resume" -> {
+                    Log.d(TAG, "Resuming camera and inference")
+                    yoloView.resumeCamera()
+                    result.success(null)
+                }
                 "setZoomLevel" -> {
                     val zoomLevel = call.argument<Double>("zoomLevel")
                     if (zoomLevel != null) {

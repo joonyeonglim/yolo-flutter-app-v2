@@ -336,6 +336,30 @@ public class SwiftYOLOPlatformView: NSObject, FlutterPlatformView, FlutterStream
             ))
         }
 
+      case "stop":
+        // Stop camera and inference
+        print("SwiftYOLOPlatformView: Stopping camera and inference")
+        yoloView?.stop()
+        result(nil)  // Success
+
+      case "pause":
+        // Pause camera and inference (iOS doesn't distinguish pause from stop)
+        print("SwiftYOLOPlatformView: Pausing camera and inference")
+        yoloView?.stop()
+        result(nil)  // Success
+
+      case "resume":
+        // Resume camera and inference
+        print("SwiftYOLOPlatformView: Resuming camera and inference")
+        yoloView?.resume()
+        result(nil)  // Success
+
+      case "switchCamera":
+        // Switch between front and back camera
+        print("SwiftYOLOPlatformView: Switching camera")
+        yoloView?.videoCapture.switchCamera()
+        result(nil)  // Success
+
       // Additional methods can be added here in the future
 
       default:

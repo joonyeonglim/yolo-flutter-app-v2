@@ -1,0 +1,36 @@
+{
+  "name": "ultralytics_yolo",
+  "version": "0.0.4",
+  "summary": "Flutter plugin for YOLO (You Only Look Once) models",
+  "description": "Flutter plugin for YOLO (You Only Look Once) models, supporting object detection, segmentation, classification, pose estimation and oriented bounding boxes (OBB) on both Android and iOS.",
+  "homepage": "https://github.com/ultralytics/yolo-flutter-app",
+  "license": {
+    "file": "../LICENSE"
+  },
+  "authors": {
+    "Ultralytics": "info@ultralytics.com"
+  },
+  "source": {
+    "path": "."
+  },
+  "source_files": "Classes/**/*",
+  "dependencies": {
+    "Flutter": [
+
+    ]
+  },
+  "platforms": {
+    "ios": "13.0"
+  },
+  "pod_target_xcconfig": {
+    "DEFINES_MODULE": "YES",
+    "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "i386"
+  },
+  "swift_versions": "5.0",
+  "resource_bundles": {
+    "ultralytics_yolo_privacy": [
+      "Resources/PrivacyInfo.xcprivacy"
+    ]
+  },
+  "swift_version": "5.0"
+}
