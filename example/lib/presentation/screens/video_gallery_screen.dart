@@ -40,21 +40,18 @@ class _VideoGalleryScreenState extends State<VideoGalleryScreen> {
     final List<VideoFile> videos = [];
     
     if (Platform.isIOS) {
-      // iOS: Documents 디렉토리에서 .mp4 파일 찾기
+      // iOS: Documents 디렉토리와 임시 디렉토리에서 .mp4 파일 찾기
       try {
+        // Documents 디렉토리 확인
         final documentsDir = await getApplicationDocumentsDirectory();
-        final List<FileSystemEntity> entities = documentsDir.listSync();
+        await _scanDirectory(documentsDir, videos);
         
-        for (final entity in entities) {
-          if (entity is File && entity.path.endsWith('.mp4')) {
-            final stat = await entity.stat();
-            videos.add(VideoFile(
-              path: entity.path,
-              name: entity.path.split('/').last,
-              size: stat.size,
-              createdAt: stat.modified,
-            ));
-          }
+        // 임시 디렉토리도 확인 (기존 녹화 파일들)
+        try {
+          final tempDir = await getTemporaryDirectory();
+          await _scanDirectory(tempDir, videos);
+        } catch (e) {
+          debugPrint('Error reading temp directory: $e');
         }
       } catch (e) {
         debugPrint('Error reading iOS videos: $e');
@@ -86,6 +83,31 @@ class _VideoGalleryScreenState extends State<VideoGalleryScreen> {
     }
     
     return videos;
+  }
+
+  Future<void> _scanDirectory(Directory directory, List<VideoFile> videos) async {
+    try {
+      final List<FileSystemEntity> entities = directory.listSync();
+      
+      for (final entity in entities) {
+        if (entity is File && entity.path.endsWith('.mp4')) {
+          final stat = await entity.stat();
+          final fileName = entity.path.split('/').last;
+          
+          // 중복 파일 확인 (같은 이름의 파일이 이미 있는지)
+          if (!videos.any((v) => v.name == fileName)) {
+            videos.add(VideoFile(
+              path: entity.path,
+              name: fileName,
+              size: stat.size,
+              createdAt: stat.modified,
+            ));
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error scanning directory ${directory.path}: $e');
+    }
   }
 
   String _formatFileSize(int bytes) {
@@ -182,11 +204,26 @@ class _VideoGalleryScreenState extends State<VideoGalleryScreen> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Video Gallery'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Video Gallery'),
+            if (!_isLoading && _videos.isNotEmpty)
+              Text(
+                '${_videos.length}개의 비디오',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.white70,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadVideos,
+            tooltip: '새로고침',
           ),
         ],
       ),
@@ -195,29 +232,56 @@ class _VideoGalleryScreenState extends State<VideoGalleryScreen> {
               child: CircularProgressIndicator(color: Colors.white),
             )
           : _videos.isEmpty
-              ? const Center(
+              ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.videocam_off,
-                        size: 64,
-                        color: Colors.white54,
-                      ),
-                      SizedBox(height: 16),
-                      Text(
-                        '저장된 비디오가 없습니다',
-                        style: TextStyle(
+                      Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.grey[900],
+                        ),
+                        child: const Icon(
+                          Icons.videocam_off,
+                          size: 48,
                           color: Colors.white54,
-                          fontSize: 18,
                         ),
                       ),
-                      SizedBox(height: 8),
-                      Text(
-                        '카메라에서 녹화해보세요!',
+                      const SizedBox(height: 24),
+                      const Text(
+                        '저장된 비디오가 없습니다',
                         style: TextStyle(
-                          color: Colors.white38,
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '카메라에서 새 비디오를 녹화해보세요!',
+                        style: TextStyle(
+                          color: Colors.white60,
                           fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.videocam, color: Colors.white),
+                        label: const Text(
+                          '카메라로 돌아가기',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.shade600,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                          ),
                         ),
                       ),
                     ],
@@ -233,49 +297,88 @@ class _VideoGalleryScreenState extends State<VideoGalleryScreen> {
                       return Card(
                         color: Colors.grey[900],
                         margin: const EdgeInsets.only(bottom: 12),
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         child: ListTile(
+                          contentPadding: const EdgeInsets.all(12),
                           leading: Container(
-                            width: 56,
-                            height: 56,
+                            width: 60,
+                            height: 60,
                             decoration: BoxDecoration(
-                              color: Colors.grey[800],
-                              borderRadius: BorderRadius.circular(8),
+                              gradient: LinearGradient(
+                                colors: [Colors.red.shade600, Colors.orange.shade600],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(10),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.red.withOpacity(0.3),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
                             ),
                             child: const Icon(
                               Icons.play_circle_fill,
                               color: Colors.white,
-                              size: 32,
+                              size: 28,
                             ),
                           ),
                           title: Text(
-                            video.name,
+                            video.name.replaceAll('YOLO_Bird_', '').replaceAll('.mp4', ''),
                             style: const TextStyle(
                               color: Colors.white,
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 15,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 4),
-                              Text(
-                                _formatDate(video.createdAt),
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 12,
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.access_time,
+                                      size: 14,
+                                      color: Colors.white60,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _formatDate(video.createdAt),
+                                      style: const TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _formatFileSize(video.size),
-                                style: const TextStyle(
-                                  color: Colors.white54,
-                                  fontSize: 12,
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.storage,
+                                      size: 14,
+                                      color: Colors.white60,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      _formatFileSize(video.size),
+                                      style: const TextStyle(
+                                        color: Colors.white54,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                           trailing: PopupMenuButton<String>(
                             iconColor: Colors.white,

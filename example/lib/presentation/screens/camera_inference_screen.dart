@@ -57,6 +57,12 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
   @override
   void initState() {
     super.initState();
+    
+    // 초기 상태 명시적으로 설정
+    _isRecording = false;
+    _isProcessingRecording = false;
+    _isCameraReady = false;
+    
     _loadModel();
 
     // Set initial threshold after frame
@@ -76,8 +82,8 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       }
     });
 
-    // 주기적으로 녹화 상태 동기화 (3초마다)
-    Timer.periodic(const Duration(seconds: 3), (timer) {
+    // 주기적으로 녹화 상태 동기화 (5초마다로 조정)
+    Timer.periodic(const Duration(seconds: 5), (timer) {
       if (!mounted) {
         timer.cancel();
         return;
@@ -148,14 +154,19 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
       print('[YOLO DEBUG] === 녹화 토글 시작 ===');
       
       // 네이티브에서 실제 녹화 상태 확인
+      print('[YOLO DEBUG] 🔍 네이티브 상태 확인 시작');
       final isCurrentlyRecording = await _yoloController.isRecording();
-      print('[YOLO DEBUG] 네이티브 녹화 상태: $isCurrentlyRecording');
-      print('[YOLO DEBUG] 현재 UI 상태: $_isRecording');
+      print('[YOLO DEBUG] 🔍 네이티브 녹화 상태: $isCurrentlyRecording');
+      print('[YOLO DEBUG] 🔍 현재 UI 상태: $_isRecording');
+      print('[YOLO DEBUG] 🔍 _isProcessingRecording: $_isProcessingRecording');
+      print('[YOLO DEBUG] 🔍 _isCameraReady: $_isCameraReady');
       
       if (isCurrentlyRecording) {
         // 녹화 중지
         print('[YOLO DEBUG] 🛑 녹화 중지 시도');
+        print('[YOLO DEBUG] 🛑 stopRecording 호출 전');
         final videoPath = await _yoloController.stopRecording();
+        print('[YOLO DEBUG] 🛑 stopRecording 호출 후');
         print('[YOLO DEBUG] 🛑 녹화 중지 완료: $videoPath');
         
         if(mounted) {
@@ -175,36 +186,21 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
           }
         }
         
-        if (mounted) {
-          if (videoPath != null) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('녹화 완료: $videoPath'),
-                duration: const Duration(seconds: 3),
-                action: SnackBarAction(
-                  label: '공유',
-                  onPressed: () => _shareRecording(videoPath),
-                ),
-              ),
-            );
-          } else {
-             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('녹화가 중지되었지만 비디오를 저장하지 못했습니다.'),
-                backgroundColor: Colors.orange,
-              ),
-            );
-          }
-        }
+        // 녹화 완료 - 팝업 없이 조용히 처리
       } else {
         // 녹화 시작
         print('[YOLO DEBUG] ▶️ 녹화 시작 시도');
         final videoPath = await _yoloController.startRecording();
         print('[YOLO DEBUG] ▶️ 녹화 시작 완료: $videoPath');
         
+        // 녹화 시작 후 네이티브 상태 재확인
+        await Future.delayed(const Duration(milliseconds: 500));
+        final recordingStateAfterStart = await _yoloController.isRecording();
+        print('[YOLO DEBUG] ▶️ 녹화 시작 후 네이티브 상태: $recordingStateAfterStart');
+        
         if (mounted) {
           setState(() {
-            _isRecording = true;
+            _isRecording = recordingStateAfterStart; // 실제 네이티브 상태로 설정
             _recordingPath = videoPath;
           });
         }
@@ -738,29 +734,32 @@ class _CameraInferenceScreenState extends State<CameraInferenceScreen> {
   }
 
   Future<void> _warmUpCamera() async {
-    // A workaround for some devices where the first recording might fail.
+    // 카메라 준비 상태만 확인하고 실제 녹화는 하지 않음
     if (!mounted || _isCameraReady) return;
     
     try {
-      print('[YOLO DEBUG] 📸 Warming up camera...');
-      // A short delay might be needed for the view to be fully initialized.
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _yoloController.startRecording();
-      await Future.delayed(const Duration(milliseconds: 200));
-      final videoPath = await _yoloController.stopRecording();
-      print('[YOLO DEBUG] 📸 Camera warm-up successful. Dummy video at: $videoPath');
+      print('[YOLO DEBUG] 📸 Camera 준비 중...');
+      // 뷰가 완전히 초기화될 때까지 대기
+      await Future.delayed(const Duration(milliseconds: 1000));
+      
+      // 실제 녹화 상태 확인만 수행 (녹화 시작/중지 없음)
+      final isCurrentlyRecording = await _yoloController.isRecording();
+      print('[YOLO DEBUG] 📸 현재 녹화 상태: $isCurrentlyRecording');
       
       if (mounted) {
         setState(() {
           _isCameraReady = true;
+          _isRecording = isCurrentlyRecording; // 실제 상태로 동기화
         });
       }
+      
+      print('[YOLO DEBUG] 📸 Camera 준비 완료');
     } catch (e) {
-      print('[YOLO DEBUG] ⚠️ Camera warm-up failed (this might be ok): $e');
-      // Still set to ready, as warm-up is not critical on all devices.
+      print('[YOLO DEBUG] ⚠️ Camera 준비 실패: $e');
       if (mounted) {
         setState(() {
           _isCameraReady = true;
+          _isRecording = false; // 오류 시 안전하게 false로 설정
         });
       }
     }

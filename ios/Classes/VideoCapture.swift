@@ -17,6 +17,13 @@ import CoreVideo
 import UIKit
 import Vision
 
+/// Protocol for video recording functionality
+public protocol VideoRecordable {
+    var isRecording: Bool { get }
+    func startRecording(completion: @escaping (URL?, Error?) -> Void)
+    func stopRecording(completion: @escaping (URL?, Error?) -> Void)
+}
+
 /// Protocol for receiving video capture frame processing results.
 @MainActor
 protocol VideoCaptureDelegate: AnyObject {
@@ -45,7 +52,7 @@ func bestCaptureDevice(position: AVCaptureDevice.Position) -> AVCaptureDevice {
   }
 }
 
-class VideoCapture: NSObject, @unchecked Sendable {
+class VideoCapture: NSObject, @unchecked Sendable, VideoRecordable {
   var predictor: Predictor!
   var previewLayer: AVCaptureVideoPreviewLayer?
   weak var delegate: VideoCaptureDelegate?
@@ -261,6 +268,12 @@ extension VideoCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
     guard inferenceOK else { return }
     predictOnFrame(sampleBuffer: sampleBuffer)
   }
+  
+  // 출력이 삭제되었을 때 호출되는 메서드
+  func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+    // 프레임 드롭 로깅 (성능 문제 진단용)
+    print("DEBUG: 프레임 드롭 발생")
+  }
 }
 
 extension VideoCapture: AVCapturePhotoCaptureDelegate {
@@ -294,52 +307,94 @@ extension VideoCapture: ResultsListener, InferenceTimeListener {
 
 // MARK: - AVCaptureFileOutputRecordingDelegate
 extension VideoCapture: AVCaptureFileOutputRecordingDelegate {
-  func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
-    print("DEBUG: Recording finished to \(outputFileURL.path)")
+  func fileOutput(_ output: AVCaptureFileOutput, didStartRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+    // 녹화가 시작되면 확실하게 isRecording 플래그를 true로 설정
+    isRecording = true
     
-    DispatchQueue.main.async { [weak self] in
-      guard let self = self else { return }
-      
-      // 상태 정리 (오류 발생 여부와 관계없이)
-      let wasRecording = self.isRecording
-      self.isRecording = false
-      
-      if let error = error {
-        print("DEBUG: Recording error: \(error) (wasRecording: \(wasRecording))")
-        self.recordingCompletionHandler?(nil, error)
-      } else {
-        print("DEBUG: Recording completed successfully (wasRecording: \(wasRecording))")
-        self.recordingCompletionHandler?(outputFileURL, nil)
-      }
-      
-      // 핸들러와 URL 정리
-      self.recordingCompletionHandler = nil
-      self.currentRecordingURL = nil
-      
-      // 상태 검증
-      if self.movieFileOutput.isRecording {
-        print("DEBUG: ⚠️ 녹화 완료 후에도 movieFileOutput.isRecording이 true입니다")
-      }
+    print("DEBUG: 🎬 didStartRecordingTo 호출됨 - 녹화 실제 시작")
+    print("DEBUG: 🎬 Recording started to \(fileURL.path)")
+    print("DEBUG: 🎬 movieFileOutput.isRecording 값: \(self.movieFileOutput.isRecording)")
+    print("DEBUG: 🎬 isRecording 플래그: \(self.isRecording)")
+    print("DEBUG: 🎬 connections 개수: \(connections.count)")
+    
+    // 녹화가 실제로 시작되었는지 확인하기 위해 연결 정보 출력
+    for (index, connection) in connections.enumerated() {
+      // inputPorts를 통해 미디어 유형 확인
+      let mediaTypes = connection.inputPorts.compactMap { $0.mediaType.rawValue }
+      let mediaTypeStr = mediaTypes.isEmpty ? "unknown" : mediaTypes.joined(separator: ", ")
+      print("DEBUG: 🎬 Connection \(index): \(mediaTypeStr) enabled: \(connection.isEnabled)")
     }
+    
+    // startRecording의 completion 호출은 여기서 처리하지 않음
+    // Flutter로의 응답은 movieFileOutput.startRecording() 호출 직후에 처리됨
+  }
+  
+  func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
+    print("DEBUG: 🎬 didFinishRecordingTo 델리게이트 호출됨")
+    print("DEBUG: 🎬 파일 URL: \(outputFileURL.path)")
+    print("DEBUG: 🎬 오류: \(error?.localizedDescription ?? "없음")")
+    
+    // 녹화가 끝나면 항상 isRecording 플래그를 false로 설정
+    let wasRecording = isRecording
+    isRecording = false
+    
+    print("DEBUG: 🎬 이전 isRecording 상태: \(wasRecording)")
+    print("DEBUG: 🎬 recordingCompletionHandler 존재 여부: \(recordingCompletionHandler != nil)")
+    
+    if let error = error {
+      print("DEBUG: 🎬 Recording error: \(error.localizedDescription)")
+      
+      // 오류 세부 정보 출력 (AVErrorKeys 활용)
+      if let avError = error as? AVError {
+        print("DEBUG: 🎬 AVError 코드: \(avError.code.rawValue)")
+      }
+      
+      // 녹화 중 오류가 발생해도 콜백 호출
+      recordingCompletionHandler?(nil, error)
+    } else {
+      print("DEBUG: 🎬 Recording finished successfully at \(outputFileURL.path)")
+      
+      // 파일이 실제로 존재하는지 확인
+      let fileExists = FileManager.default.fileExists(atPath: outputFileURL.path)
+      print("DEBUG: 🎬 녹화된 파일 존재 여부: \(fileExists ? "있음" : "없음")")
+      
+      if fileExists {
+        // 파일 크기도 확인
+        do {
+          let attributes = try FileManager.default.attributesOfItem(atPath: outputFileURL.path)
+          if let fileSize = attributes[.size] as? Int64 {
+            print("DEBUG: 🎬 파일 크기: \(fileSize) bytes")
+          }
+        } catch {
+          print("DEBUG: 🎬 파일 속성 확인 실패: \(error)")
+        }
+      }
+      
+      recordingCompletionHandler?(outputFileURL, nil)
+    }
+    
+    print("DEBUG: 🎬 recordingCompletionHandler 호출 완료, 핸들러 정리")
+    recordingCompletionHandler = nil
   }
 }
 
 // MARK: - Recording Functions
 extension VideoCapture {
   func startRecording(completion: @escaping (URL?, Error?) -> Void) {
-    // 실제 movieFileOutput 상태와 플래그 동기화 확인
-    if isRecording && movieFileOutput.isRecording {
+    print("DEBUG: 🎬 startRecording 호출됨")
+    print(getCurrentRecordingStatus())
+    
+    // 이미 녹화 중인지 실제 movieFileOutput 상태로 확인
+    if movieFileOutput.isRecording {
+      print("DEBUG: 🎬 이미 녹화 중이므로 시작 불가")
       completion(nil, NSError(domain: "VideoCapture", code: 100, userInfo: [NSLocalizedDescriptionKey: "이미 녹화 중입니다"]))
       return
-    } else if isRecording && !movieFileOutput.isRecording {
-      // 상태 불일치 감지 - 플래그 재설정
-      print("DEBUG: 녹화 상태 불일치 감지 - isRecording은 true이지만 실제로는 녹화 중이 아님")
-      isRecording = false
-    } else if !isRecording && movieFileOutput.isRecording {
-      // 반대 경우도 처리
-      print("DEBUG: 녹화 상태 불일치 감지 - isRecording은 false이지만 실제로는 녹화 중")
-      completion(nil, NSError(domain: "VideoCapture", code: 101, userInfo: [NSLocalizedDescriptionKey: "녹화 상태 불일치 - 다시 시도해주세요"]))
-      return
+    }
+    
+    // isRecording 플래그가 true인데 실제로 녹화가 진행 중이 아닌 경우
+    if isRecording && !movieFileOutput.isRecording {
+      print("DEBUG: 상태 불일치 감지 - isRecording은 true이나 실제로는 녹화 중이 아님")
+      isRecording = false // 상태 재설정
     }
     
     // 고유한 파일 이름 생성: 타임스탬프 + UUID
@@ -347,8 +402,9 @@ extension VideoCapture {
     let uuid = UUID().uuidString.prefix(8)
     let fileName = "recording_\(timestamp)_\(uuid).mp4"
     
-    let tempDir = FileManager.default.temporaryDirectory
-    let fileURL = tempDir.appendingPathComponent(fileName)
+    // Documents 디렉토리에 저장 (갤러리에서 접근 가능)
+    let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+    let fileURL = documentsDir.appendingPathComponent(fileName)
     
     // 파일이 이미 존재하면 삭제
     try? FileManager.default.removeItem(at: fileURL)
@@ -382,9 +438,6 @@ extension VideoCapture {
         }
       }
       
-      // 실제 녹화 시작 전에 플래그 설정
-      self.isRecording = true
-      
       if self.movieFileOutput.isRecording == false {
         // 디버그: movieFileOutput 상태 확인
         print("DEBUG: movieFileOutput 상태 확인 - 연결된 출력 개수: \(self.captureSession.outputs.count)")
@@ -402,8 +455,6 @@ extension VideoCapture {
         } else {
           print("DEBUG: ⚠️ movieFileOutput에 연결이 없습니다! 이는 녹화가 작동하지 않는 원인일 수 있습니다.")
           
-          // 연결이 없는 경우 녹화 상태를 초기화하고 오류 반환
-          self.isRecording = false
           DispatchQueue.main.async {
             completion(nil, NSError(domain: "VideoCapture", code: 111, userInfo: [NSLocalizedDescriptionKey: "movieFileOutput에 연결이 없음"]))
           }
@@ -441,8 +492,9 @@ extension VideoCapture {
           }
         }
         
-        self.recordingCompletionHandler = completion
         self.currentRecordingURL = fileURL
+        
+        print("DEBUG: recordingCompletionHandler 설정 완료")
         
         // 녹화 시작 시도
         // iOS 14+ 에서만 가능한 추가 구성
@@ -455,21 +507,23 @@ extension VideoCapture {
           }
         }
         
-        do {
-          // 녹화를 try-catch로 감싸서 예상치 못한 예외 처리
-          print("DEBUG: 녹화 시작 시도 to \(fileURL.path)")
-          self.movieFileOutput.startRecording(to: fileURL, recordingDelegate: self)
-          print("DEBUG: Video recording started successfully")
-        } catch {
-          // 예외 발생 시 상태 초기화 및 오류 보고
-          print("DEBUG: 녹화 시작 중 예외 발생: \(error)")
-          self.isRecording = false
-          DispatchQueue.main.async {
-            completion(nil, error)
-          }
+        print("DEBUG: 🎬 녹화 시작 시도 to \(fileURL.path)")
+        self.movieFileOutput.startRecording(to: fileURL, recordingDelegate: self)
+        print("DEBUG: 🎬 movieFileOutput.startRecording() 호출 완료")
+        
+        // 즉시 Flutter로 응답 반환 (실제 녹화 시작은 델리게이트에서 확인)
+        DispatchQueue.main.async {
+          completion(fileURL, nil)
+        }
+        
+        // 녹화가 실제로 시작될 때까지 짧은 시간 대기
+        // didStartRecordingTo 델리게이트가 호출되면 isRecording이 true로 설정됨
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+          print("DEBUG: 🎬 녹화 시작 후 상태 확인")
+          print("DEBUG: 🎬 isRecording: \(self.isRecording)")
+          print("DEBUG: 🎬 movieFileOutput.isRecording: \(self.movieFileOutput.isRecording)")
         }
       } else {
-        self.isRecording = false
         DispatchQueue.main.async {
           completion(nil, NSError(domain: "VideoCapture", code: 101, userInfo: [NSLocalizedDescriptionKey: "녹화 시작 실패 - 이미 다른 녹화가 진행 중"]))
         }
@@ -478,24 +532,28 @@ extension VideoCapture {
   }
   
   func stopRecording(completion: @escaping (URL?, Error?) -> Void) {
-    // 실제 녹화 상태와 플래그 동기화 확인
-    if !isRecording && !movieFileOutput.isRecording {
+    print("DEBUG: 🎬 stopRecording 호출됨")
+    print(getCurrentRecordingStatus())
+    
+    // 실제 녹화 상태 확인 (이중 검증)
+    if !movieFileOutput.isRecording {
+      print("DEBUG: 🎬 movieFileOutput.isRecording이 false - 녹화 중이 아님")
+      // 상태 불일치 감지 - isRecording 플래그 재설정
+      if isRecording {
+        print("DEBUG: 🎬 상태 불일치 감지 - isRecording은 true이나 실제로는 녹화 중이 아님")
+        isRecording = false
+      }
+      
+      // 사용자에게 오류 반환
       completion(nil, NSError(domain: "VideoCapture", code: 102, userInfo: [NSLocalizedDescriptionKey: "녹화 중이 아닙니다"]))
-      return
-    } else if !isRecording && movieFileOutput.isRecording {
-      // 상태 불일치 감지 - 플래그 재설정
-      print("DEBUG: 녹화 상태 불일치 감지 - isRecording은 false이지만 실제로는 녹화 중")
-      isRecording = true
-    } else if isRecording && !movieFileOutput.isRecording {
-      // 반대 경우도 처리
-      print("DEBUG: 녹화 상태 불일치 감지 - isRecording은 true이지만 실제로는 녹화 중이 아님")
-      isRecording = false
-      completion(nil, NSError(domain: "VideoCapture", code: 103, userInfo: [NSLocalizedDescriptionKey: "녹화 상태 불일치 - 다시 시도해주세요"]))
       return
     }
     
+    print("DEBUG: movieFileOutput.isRecording이 true - 녹화 중지 진행")
+    
     cameraQueue.async { [weak self] in
       guard let self = self else {
+        print("DEBUG: VideoCapture 객체가 해제됨")
         DispatchQueue.main.async { completion(nil, NSError(domain: "VideoCapture", code: 108, userInfo: [NSLocalizedDescriptionKey: "VideoCapture 객체가 해제됨"])) }
         return
       }
@@ -504,74 +562,40 @@ extension VideoCapture {
       if self.movieFileOutput.isRecording {
         print("DEBUG: 녹화 중지 시도 중...")
         
-        // 이미 중지 중인 경우 방지
-        if self.recordingCompletionHandler != nil {
-          DispatchQueue.main.async {
-            completion(nil, NSError(domain: "VideoCapture", code: 104, userInfo: [NSLocalizedDescriptionKey: "이미 녹화 중지 중입니다"]))
-          }
-          return
-        }
-        
-        // 원래의 콜백을 저장하고 새 콜백 설정
+        // recordingCompletionHandler를 stopRecording용으로 설정
         self.recordingCompletionHandler = { [weak self] (url, error) in
           guard let self = self else {
-            completion(url, error)
+            DispatchQueue.main.async { completion(url, error) }
             return
           }
           
+          print("DEBUG: 🎬 recordingCompletionHandler 호출됨 (중지)")
           self.isRecording = false
           
-          if let error = error {
-            print("DEBUG: 녹화 중지 오류: \(error)")
-            completion(nil, error)
-          } else if let url = url {
-            print("DEBUG: 녹화 성공적으로 완료됨: \(url.path)")
-            
-            // 녹화 완료 후 약간의 지연 시간을 두어 리소스 정리
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+          DispatchQueue.main.async {
+            if let error = error {
+              print("DEBUG: 🎬 녹화 중지 오류: \(error)")
+              completion(nil, error)
+            } else if let url = url {
+              print("DEBUG: 🎬 녹화 성공적으로 완료됨: \(url.path)")
               completion(url, nil)
+            } else {
+              print("DEBUG: 🎬 녹화가 중지되었으나 URL이 없음")
+              completion(nil, NSError(domain: "VideoCapture", code: 109, userInfo: [NSLocalizedDescriptionKey: "녹화 URL을 찾을 수 없음"]))
             }
-          } else {
-            print("DEBUG: 녹화가 중지되었으나 URL이 없음")
-            completion(nil, NSError(domain: "VideoCapture", code: 109, userInfo: [NSLocalizedDescriptionKey: "녹화 URL을 찾을 수 없음"]))
           }
         }
         
-        // 녹화 중지 시도를 try-catch로 감싸서 예외 처리
-        do {
-          // 녹화 중지
-          self.movieFileOutput.stopRecording()
-        } catch {
-          print("DEBUG: 녹화 중지 중 예외 발생: \(error)")
-          self.isRecording = false
-          DispatchQueue.main.async {
-            completion(nil, error)
-          }
-        }
+        print("DEBUG: movieFileOutput.stopRecording() 호출")
+        // 녹화 중지
+        self.movieFileOutput.stopRecording()
+        print("DEBUG: movieFileOutput.stopRecording() 호출 완료")
       } else {
         // 이 시점에서는 isRecording과 실제 녹화 상태가 불일치하는 상황
         print("DEBUG: ⚠️ 상태 불일치: stopRecording 호출됨 - 실제 녹화 중이 아님")
         
         // 상태 정리 및 초기화
         self.isRecording = false
-        
-        // movieFileOutput이 정상적으로 연결되어 있지 않은 경우 재설정 시도
-        if !self.captureSession.outputs.contains(self.movieFileOutput) {
-          print("DEBUG: movieFileOutput이 연결되어 있지 않아 재설정 시도")
-          
-          // 세션 재구성
-          self.captureSession.beginConfiguration()
-          
-          // movieFileOutput 다시 추가
-          if self.captureSession.canAddOutput(self.movieFileOutput) {
-            self.captureSession.addOutput(self.movieFileOutput)
-            print("DEBUG: movieFileOutput 재연결 성공")
-          } else {
-            print("DEBUG: ⚠️ movieFileOutput 재연결 실패")
-          }
-          
-          self.captureSession.commitConfiguration()
-        }
         
         DispatchQueue.main.async {
           completion(nil, NSError(domain: "VideoCapture", code: 103, userInfo: [NSLocalizedDescriptionKey: "녹화가 이미 중지됨"]))
@@ -605,5 +629,20 @@ extension VideoCapture {
     }
     
     captureSession.commitConfiguration()
+  }
+  
+  // 현재 녹화 상태를 종합적으로 확인하는 메서드
+  func getCurrentRecordingStatus() -> String {
+    let movieFileOutputRecording = movieFileOutput.isRecording
+    let handlerExists = recordingCompletionHandler != nil
+    let currentURL = currentRecordingURL?.path ?? "nil"
+    
+    return """
+    DEBUG: 📊 녹화 상태 종합:
+    - isRecording 플래그: \(isRecording)
+    - movieFileOutput.isRecording: \(movieFileOutputRecording)
+    - recordingCompletionHandler 존재: \(handlerExists)
+    - currentRecordingURL: \(currentURL)
+    """
   }
 }

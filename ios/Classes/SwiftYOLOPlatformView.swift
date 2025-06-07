@@ -391,13 +391,19 @@ public class SwiftYOLOPlatformView: NSObject, FlutterPlatformView, FlutterStream
         print("SwiftYOLOPlatformView: Received isRecording call")
         
         guard let yoloView = self.yoloView else {
+          print("SwiftYOLOPlatformView: yoloView is nil - returning false")
           result(false)
           return
         }
         
         let videoCapture = yoloView.videoCapture
+        let recordingState = videoCapture.isRecording
+        let movieFileOutputState = videoCapture.movieFileOutput.isRecording
         
-        result(videoCapture.isRecording)
+        print("SwiftYOLOPlatformView: videoCapture.isRecording = \(recordingState)")
+        print("SwiftYOLOPlatformView: movieFileOutput.isRecording = \(movieFileOutputState)")
+        
+        result(recordingState)
 
       case "setAudioEnabled":
         if let args = call.arguments as? [String: Any],
@@ -433,12 +439,6 @@ public class SwiftYOLOPlatformView: NSObject, FlutterPlatformView, FlutterStream
         // Resume camera and inference
         print("SwiftYOLOPlatformView: Resuming camera and inference")
         yoloView?.resume()
-        result(nil)  // Success
-
-      case "switchCamera":
-        // Switch between front and back camera
-        print("SwiftYOLOPlatformView: Switching camera")
-        yoloView?.videoCapture.switchCamera()
         result(nil)  // Success
 
       // Additional methods can be added here in the future
